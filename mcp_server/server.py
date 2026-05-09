@@ -24,11 +24,10 @@ app = Server("engram-memory")
 
 
 def _create_api_client() -> MemoryAPIClient:
-    """Initialize the mTLS API client with certs from Secrets Manager."""
-    region = os.environ.get("AWS_REGION", "us-east-1")
+    """Initialize the mTLS API client with age-encrypted local certs."""
     base_url = os.environ["MEMORY_API_URL"]
 
-    bundle = load_client_cert(region)
+    bundle = load_client_cert()
     cert_path, key_path = write_temp_cert_files(bundle)
 
     def _cleanup() -> None:
