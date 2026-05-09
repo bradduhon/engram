@@ -17,6 +17,7 @@ mcp-server = [
     "httpx>=0.27",
     "boto3>=1.35",
     "pydantic>=2.0,<3.0",
+    "cryptography>=43.0",
 ]
 dev = [
     "pytest>=8.0",
