@@ -375,12 +375,14 @@ resource "aws_lambda_function" "cert_rotator" {
 
   environment {
     variables = {
-      CLIENT_CERT_ARN           = var.client_cert_arn
-      CERT_SECRET_ID            = var.client_cert_secret_arn
-      PASSPHRASE_SECRET_ID      = var.client_cert_passphrase_secret_arn
-      POWERTOOLS_SERVICE_NAME   = local.cert_rotator_name
-      LOG_LEVEL                 = "INFO"
-      # SNS_TOPIC_ARN wired in Phase 6 when the SNS topic is created.
+      CLIENT_CERT_ARN         = var.client_cert_arn
+      CERT_SECRET_ID          = var.client_cert_secret_arn
+      PASSPHRASE_SECRET_ID    = var.client_cert_passphrase_secret_arn
+      POWERTOOLS_SERVICE_NAME = local.cert_rotator_name
+      LOG_LEVEL               = "INFO"
+      # SNS topic ARN is constructed from known values to avoid a circular
+      # dependency between compute and observability modules.
+      SNS_TOPIC_ARN = "arn:aws:sns:${var.aws_region}:${var.account_id}:engram-alerts"
     }
   }
 
