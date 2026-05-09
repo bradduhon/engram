@@ -107,9 +107,6 @@ resource "aws_scheduler_schedule" "daily_summarize" {
       requestContext = {
         http = { path = "/summarize" }
       }
-      headers = {
-        "x-amzn-mtls-clientcert-subject" = "CN=${var.expected_client_cn}"
-      }
       body = jsonencode({
         scope             = "global"
         delete_originals  = false
@@ -119,7 +116,7 @@ resource "aws_scheduler_schedule" "daily_summarize" {
 }
 ```
 
-Note: The scheduler invokes the Lambda directly (not through API Gateway), so it must include the mock mTLS header for the CN assertion to pass. This is a trusted internal invocation -- EventBridge Scheduler is an AWS service principal with a scoped IAM role.
+Note: The scheduler invokes Lambda directly (not through API Gateway), bypassing mTLS entirely. The trust boundary is the EventBridge Scheduler IAM role and the Lambda resource policy, which limits direct invocations to AWS service principals with scoped roles.
 
 ### EventBridge Rule -- Cert Expiry
 
@@ -156,7 +153,6 @@ resource "aws_cloudwatch_event_target" "cert_rotation" {
 | `cert_rotator_function_name` | `string` | Cert rotator Lambda name (for permission) |
 | `client_cert_arn` | `string` | ACM client cert ARN (for expiry event filter) |
 | `alert_email` | `string` | Email for SNS alarm notifications |
-| `expected_client_cn` | `string` | Client CN for scheduler's mock mTLS header |
 | `account_id` | `string` | AWS account ID |
 | `aws_region` | `string` | AWS region |
 
@@ -175,7 +171,7 @@ resource "aws_cloudwatch_event_target" "cert_rotation" {
 - **Scheduler IAM role:** Allows only `lambda:InvokeFunction` on the memory handler Lambda. No other actions.
 - **Cert expiry event filter:** Scoped to the specific client cert ARN. Other ACM cert events are ignored.
 - **`treat_missing_data = "notBreaching"`:** Prevents false alarms when no Lambda invocations occur (e.g., overnight, weekends). Missing data points are treated as "OK".
-- **Scheduler mock header:** The daily summarizer invokes Lambda directly with a mock `x-amzn-mtls-clientcert-subject` header. This bypasses API Gateway's mTLS check, but the Lambda's CN assertion still validates. The scheduler IAM role is the trust boundary here.
+- **Scheduler direct invocation:** The daily summarizer invokes Lambda directly, bypassing API Gateway mTLS. The trust boundary is the EventBridge Scheduler IAM role and Lambda resource policy.
 
 ## Implementation Steps
 
@@ -195,13 +191,12 @@ resource "aws_cloudwatch_event_target" "cert_rotation" {
      cert_rotator_function_name    = module.compute.cert_rotator_function_name
      client_cert_arn               = module.certificates.client_cert_arn
      alert_email                   = var.alert_email
-     expected_client_cn            = var.expected_client_cn
      account_id                    = data.aws_caller_identity.current.account_id
      aws_region                    = data.aws_region.current.name
    }
    ```
 
-5. Add `alert_email` and `expected_client_cn` to `terraform/variables.tf`.
+5. Add `alert_email` to `terraform/variables.tf`.
 
 6. Run `terraform apply -target=module.observability`.
 
