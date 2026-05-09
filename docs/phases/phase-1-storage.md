@@ -89,7 +89,7 @@ BUCKET="engram-memory-${ACCOUNT_ID}"
 aws s3vectors create-index \
   --bucket "$BUCKET" \
   --index-name memories \
-  --dimension 1536 \
+  --dimension 1024 \
   --distance-metric COSINE
 
 echo "Vector index 'memories' created on bucket $BUCKET"
@@ -222,7 +222,7 @@ aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=${VPC_ID} Name=servi
 
 # Verify vector index
 aws s3vectors describe-index --bucket engram-memory-${ACCOUNT_ID} --index-name memories
-# Expected: index with dimension 1536, COSINE metric
+# Expected: index with dimension 1024, COSINE metric
 
 # Terraform validation
 cd terraform && terraform validate
