@@ -24,3 +24,8 @@ variable "route53_zone_id" {
   type        = string
 }
 
+variable "alert_email" {
+  description = "Email address for SNS alarm notifications (requires manual confirmation after apply)"
+  type        = string
+}
+

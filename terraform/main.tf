@@ -61,4 +61,16 @@ module "api" {
 }
 
 # Phase 6: CloudWatch alarms, SNS, EventBridge scheduler
-# module "observability" { ... }
+module "observability" {
+  source = "./modules/observability"
+
+  memory_handler_function_name = module.compute.memory_handler_function_name
+  memory_handler_arn           = module.compute.memory_handler_arn
+  cert_rotator_arn             = module.compute.cert_rotator_arn
+  cert_rotator_function_name   = module.compute.cert_rotator_function_name
+  client_cert_arn              = module.certificates.client_cert_arn
+  alert_email                  = var.alert_email
+  account_id                   = local.account_id
+  aws_region                   = var.aws_region
+  tags                         = {}
+}
