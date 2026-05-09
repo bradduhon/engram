@@ -29,7 +29,7 @@ All AWS resources use the `engram-` prefix.
 - **Logging:** `logging` stdlib with structured JSON output via a custom formatter for Lambda. Log tool name, scope, latency. Never log request bodies, tokens, keys, or PII.
 - **Formatting:** f-strings. No `.format()` or `%`.
 - **Imports:** stdlib, blank line, third-party, blank line, local. isort enforced.
-- **Safety:** No mutable default arguments. Assert invariants on embedding outputs (length = 1536) before returning. No global mutable state.
+- **Safety:** No mutable default arguments. Assert invariants on embedding outputs (length = 1024) before returning. No global mutable state.
 - **Dependencies (Lambda):** Only stdlib + boto3 (built-in) + pydantic. Bundle pydantic into the deployment zip. No other third-party packages in Lambda.
 - **Dependencies (MCP server):** `mcp`, `httpx`, `boto3`, `pydantic`.
 
@@ -61,7 +61,7 @@ All AWS resources use the `engram-` prefix.
 2. **S3 bucket policy:** Explicit deny for requests not sourced from the S3 VPC Gateway Endpoint (`aws:SourceVpce` condition).
 3. **IAM:** Scoped to exact actions and resource ARNs. Explicit deny on Bedrock admin/discovery APIs (`ListFoundationModels`, `GetFoundationModel`, `CreateModelCustomizationJob`).
 4. **Network isolation:** Lambda in VPC private subnets. No NAT, no internet. S3 via Gateway Endpoint. Bedrock via Interface Endpoint with endpoint policy scoped to Titan Embed v2 + Haiku model ARNs.
-5. **mTLS:** API Gateway validates client cert chain. Lambda asserts CN from `x-amzn-mtls-clientcert-subject` header as defense-in-depth.
+5. **mTLS:** API Gateway validates the client cert against a truststore containing only the leaf certificate of the specific ACM exportable client cert. Pinning the leaf cert means no other cert -- including others signed by the same CA -- is trusted. Direct Lambda invocations (scheduler, cert rotator) are controlled by IAM and Lambda resource policies.
 6. **Encryption at rest:** S3 SSE-KMS (`aws/s3` managed key). Secrets Manager default encryption.
 7. **Private key handling:** Secrets Manager for server-side. age encryption for on-disk hook key. MCP server holds key in process memory only, never writes to disk.
 8. **Blast radius:** Lambda reserved concurrency = 10. API Gateway throttle = 100 burst / 50 steady.

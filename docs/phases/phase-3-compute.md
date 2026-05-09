@@ -209,7 +209,6 @@ class Config:
     vector_index_name: str
     embed_model_id: str
     haiku_model_id: str
-    expected_client_cn: str
     aws_region: str
 
     @classmethod
@@ -219,7 +218,6 @@ class Config:
             vector_index_name=os.environ.get("VECTOR_INDEX_NAME", "memories"),
             embed_model_id=os.environ.get("EMBED_MODEL_ID", "amazon.titan-embed-text-v2:0"),
             haiku_model_id=os.environ.get("HAIKU_MODEL_ID", "anthropic.claude-haiku-4-5-20251001"),
-            expected_client_cn=os.environ["EXPECTED_CLIENT_CN"],
             aws_region=os.environ.get("AWS_REGION", "us-east-1"),
         )
 ```
@@ -290,30 +288,6 @@ class SummarizeResponse(BaseModel):
     scope: str
 ```
 
-#### `src/memory_handler/auth.py`
-
-```python
-from __future__ import annotations
-
-import logging
-
-logger = logging.getLogger(__name__)
-
-
-def assert_trusted_client(headers: dict[str, str], expected_cn: str) -> None:
-    """Validate the mTLS client certificate CN from the API Gateway header.
-
-    Raises PermissionError if the client is not trusted.
-    """
-    subject = headers.get("x-amzn-mtls-clientcert-subject", "")
-    if not subject:
-        logger.warning("Missing x-amzn-mtls-clientcert-subject header")
-        raise PermissionError("Missing client certificate subject")
-    if expected_cn not in subject:
-        logger.warning("Untrusted client subject: %s", subject)
-        raise PermissionError(f"Untrusted client subject: {subject}")
-```
-
 #### `src/memory_handler/embeddings.py`
 
 ```python
@@ -324,11 +298,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-EXPECTED_DIMENSIONS = 1536
+EXPECTED_DIMENSIONS = 1024
 
 
 def get_embedding(text: str, bedrock_client: object, model_id: str) -> list[float]:
-    """Generate a 1536-dimensional embedding vector using Titan Embed v2."""
+    """Generate a 1024-dimensional embedding vector using Titan Embed v2."""
     response = bedrock_client.invoke_model(  # type: ignore[union-attr]
         modelId=model_id,
         body=json.dumps({
@@ -592,7 +566,7 @@ def handle_summarize(
 
     # Use a zero vector to get all memories (Haiku will filter by recency)
     # Alternative: list all keys in the prefix via S3 and retrieve vectors by key
-    zero_vector = [0.0] * 1536
+    zero_vector = [0.0] * 1024
     results = query_vectors(
         bucket=config.memory_bucket,
         index_name=config.vector_index_name,
@@ -689,7 +663,6 @@ import time
 
 import boto3
 
-from .auth import assert_trusted_client
 from .config import Config
 from .models import RecallRequest, StoreRequest, SummarizeRequest
 from .recall import handle_recall
@@ -723,9 +696,6 @@ def handler(event: dict, context: object) -> dict:
         # Extract path and headers from API Gateway v2 payload
         path = event.get("requestContext", {}).get("http", {}).get("path", "")
         headers = {k.lower(): v for k, v in event.get("headers", {}).items()}
-
-        # Defense-in-depth: assert client CN
-        assert_trusted_client(headers, _config.expected_client_cn)
 
         tool_name = ROUTE_MAP.get(path)
         if not tool_name:
@@ -893,7 +863,6 @@ The cert rotator uses only boto3 (built-in) and needs no vendoring.
 | `client_cert_arn` | `string` | ACM client cert ARN (for cert rotator) |
 | `client_cert_secret_arn` | `string` | Secrets Manager cert bundle ARN |
 | `client_cert_passphrase_secret_arn` | `string` | Secrets Manager passphrase ARN |
-| `expected_client_cn` | `string` | Expected client cert CN (default: `"mcp-client.brad-duhon.com"`) |
 | `aws_region` | `string` | AWS region |
 | `account_id` | `string` | AWS account ID |
 
@@ -940,8 +909,7 @@ The cert rotator uses only boto3 (built-in) and needs no vendoring.
      client_cert_arn                 = module.certificates.client_cert_arn
      client_cert_secret_arn          = module.certificates.client_cert_secret_arn
      client_cert_passphrase_secret_arn = module.certificates.client_cert_passphrase_secret_arn
-     expected_client_cn              = var.expected_client_cn
-     aws_region                      = data.aws_region.current.name
+     aws_region                      = data.aws_region.current.region
      account_id                      = data.aws_caller_identity.current.account_id
    }
    ```
@@ -950,7 +918,7 @@ The cert rotator uses only boto3 (built-in) and needs no vendoring.
 11. Smoke test the Lambda directly:
     ```bash
     aws lambda invoke --function-name engram-memory-handler \
-      --payload '{"requestContext":{"http":{"path":"/store"}},"headers":{"x-amzn-mtls-clientcert-subject":"CN=mcp-client.brad-duhon.com"},"body":"{\"text\":\"test memory\",\"scope\":\"global\",\"conversation_id\":\"test-1\"}"}' \
+      --payload '{"requestContext":{"http":{"path":"/store"}},"body":"{\"text\":\"test memory\",\"scope\":\"global\",\"conversation_id\":\"test-1\"}"}' \
       /tmp/response.json
     cat /tmp/response.json
     ```
@@ -980,7 +948,7 @@ aws ec2 describe-vpc-endpoints \
 
 # Verify direct Lambda invocation (bypasses API Gateway, uses mock headers)
 aws lambda invoke --function-name engram-memory-handler \
-  --payload '{"requestContext":{"http":{"path":"/store"}},"headers":{"x-amzn-mtls-clientcert-subject":"CN=mcp-client.brad-duhon.com"},"body":"{\"text\":\"acceptance test memory\",\"scope\":\"global\",\"conversation_id\":\"acceptance-1\"}"}' \
+  --payload '{"requestContext":{"http":{"path":"/store"}},"body":"{\"text\":\"acceptance test memory\",\"scope\":\"global\",\"conversation_id\":\"acceptance-1\"}"}' \
   /tmp/response.json && cat /tmp/response.json
 # Expected: {"statusCode": 200, "body": "{\"stored\": true, ...}"}
 

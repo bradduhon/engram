@@ -21,6 +21,9 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+terraform.tfvars
+*.tfvars
+terraform/backend.hcl
 
 # Lambda packaging
 *.zip
