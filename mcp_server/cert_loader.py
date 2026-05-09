@@ -7,19 +7,16 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
-import boto3
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    NoEncryption,
-    PrivateFormat,
-    load_pem_private_key,
-)
+import pyrage
 
 logger = logging.getLogger(__name__)
 
-_CERT_SECRET_ID = "engram/mcp-client-cert"
-_PASSPHRASE_SECRET_ID = "engram/mcp-client-cert-passphrase"
+_CERT_DIR = Path.home() / ".claude" / "certs"
+_CERT_PATH = _CERT_DIR / "client.crt"
+_KEY_AGE_PATH = _CERT_DIR / "client.key.age"
+_AGE_IDENTITY_PATH = _CERT_DIR / "age-identity.txt"
 
 
 @dataclass(frozen=True)
@@ -28,45 +25,39 @@ class CertBundle:
     key_pem: str
 
 
-def load_client_cert(region: str) -> CertBundle:
-    """Fetch the mTLS client cert bundle and passphrase from Secrets Manager.
+def load_client_cert() -> CertBundle:
+    """Load the mTLS client cert from local age-encrypted storage.
 
-    Returns the cert PEM and decrypted key PEM. The private key is decrypted
-    in memory using the passphrase; plaintext key material is never written
-    to disk by this function.
+    Reads the leaf certificate from ~/.claude/certs/client.crt and decrypts
+    the private key from ~/.claude/certs/client.key.age using the age identity
+    at ~/.claude/certs/age-identity.txt. Plaintext key material exists only
+    in process memory. Requires hooks/setup-certs.sh to have been run first.
     """
-    sm = boto3.client("secretsmanager", region_name=region)
+    for path in (_CERT_PATH, _KEY_AGE_PATH, _AGE_IDENTITY_PATH):
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Required cert file not found: {path}. "
+                "Run hooks/setup-certs.sh to initialize local cert storage."
+            )
 
-    bundle_response = sm.get_secret_value(SecretId=_CERT_SECRET_ID)
-    passphrase_response = sm.get_secret_value(SecretId=_PASSPHRASE_SECRET_ID)
+    cert_pem = _CERT_PATH.read_text()
 
-    bundle_pem: str = bundle_response["SecretString"]
-    passphrase: str = passphrase_response["SecretString"]
-
-    # The bundle contains the certificate followed by the encrypted private key.
-    # Split on the first private key marker to separate them.
-    for marker in ("-----BEGIN ENCRYPTED PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----"):
-        if marker in bundle_pem:
-            split_idx = bundle_pem.index(marker)
-            cert_pem = bundle_pem[:split_idx].strip()
-            encrypted_key_pem = bundle_pem[split_idx:].strip()
-            break
-    else:
-        raise ValueError("No private key block found in cert bundle from Secrets Manager")
-
-    # Decrypt the private key in memory -- no temp files for the encrypted form.
-    private_key = load_pem_private_key(
-        encrypted_key_pem.encode(),
-        password=passphrase.encode(),
+    identity = pyrage.x25519.Identity.from_str(
+        # age-identity.txt contains the AGE-SECRET-KEY-1... line plus a comment header.
+        # from_str accepts the full file content.
+        _AGE_IDENTITY_PATH.read_text().strip()
     )
-    decrypted_key_pem = private_key.private_bytes(
-        encoding=Encoding.PEM,
-        format=PrivateFormat.PKCS8,
-        encryption_algorithm=NoEncryption(),
+    key_pem = pyrage.decrypt(
+        _KEY_AGE_PATH.read_bytes(),
+        [identity],
     ).decode()
 
-    logger.info("Loaded and decrypted client cert from Secrets Manager")
-    return CertBundle(cert_pem=cert_pem, key_pem=decrypted_key_pem)
+    assert key_pem.startswith("-----BEGIN"), (
+        "age decryption produced unexpected output -- key may be corrupt"
+    )
+
+    logger.info("Loaded client cert from local age-encrypted storage")
+    return CertBundle(cert_pem=cert_pem, key_pem=key_pem)
 
 
 def write_temp_cert_files(bundle: CertBundle) -> tuple[str, str]:
