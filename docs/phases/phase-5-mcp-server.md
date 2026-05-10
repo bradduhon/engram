@@ -349,17 +349,18 @@ if __name__ == "__main__":
 
 ### Claude Code MCP Configuration
 
-File: `~/.claude/mcp_servers.json` (or `~/.config/claude/mcp_servers.json` depending on platform)
+Add the `mcpServers` key to `~/.claude.json` (Claude Code's global config). Do not replace existing content.
 
 ```json
 {
-  "engram-memory": {
-    "command": "python",
-    "args": ["-m", "mcp_server.server"],
-    "cwd": "<path-to-engram-repo>",
-    "env": {
-      "MEMORY_API_URL": "https://memory.<your-domain>",
-      "AWS_REGION": "us-east-1"
+  "mcpServers": {
+    "engram-memory": {
+      "command": "python",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "<path-to-engram-repo>",
+      "env": {
+        "MEMORY_API_URL": "https://memory.<your-domain>"
+      }
     }
   }
 }
@@ -398,7 +399,7 @@ None.
    MEMORY_API_URL=https://memory.<your-domain> python -m mcp_server.server
    ```
    (It will wait for stdin input via the MCP stdio protocol.)
-8. Add MCP config to `~/.claude/mcp_servers.json`.
+8. Add `mcpServers` key to `~/.claude.json` with the engram-memory server config.
 9. Restart Claude Code and verify the three tools appear.
 10. Test a round-trip: ask Claude to store a memory, then recall it.
 
