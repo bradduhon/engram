@@ -1,7 +1,6 @@
 #!/bin/bash
-# Copyright (c) 2026 Brad Duhon. All Rights Reserved.
-# Confidential and Proprietary.
-# Unauthorized copying of this file is strictly prohibited.
+# Copyright (c) 2026 Engram Contributors. All Rights Reserved.
+# Licensed under the MIT License. See LICENSE for details.
 #
 # One-time cert setup. Fetches the mTLS client cert from Secrets Manager,
 # decrypts the private key in a pipe (plaintext never touches disk), and
@@ -11,6 +10,18 @@ set -euo pipefail
 CERT_DIR="$HOME/.claude/certs"
 mkdir -p "$CERT_DIR"
 chmod 700 "$CERT_DIR"
+
+# Usage: setup-certs.sh <aws-profile> [aws-region]
+AWS_PROFILE="${1:?Usage: setup-certs.sh <aws-profile> [aws-region]}"
+AWS_REGION="${2:-us-east-1}"
+
+# AWS config -- override via env vars if needed
+AWS_REGION="${AWS_REGION:-us-east-1}"
+AWS_PROFILE="${AWS_PROFILE:-}"
+_AWS=(aws --region "$AWS_REGION")
+if [ -n "$AWS_PROFILE" ]; then
+  _AWS+=(--profile "$AWS_PROFILE")
+fi
 
 # Step 1: Generate age identity if not exists
 if [ ! -f "$CERT_DIR/age-identity.txt" ]; then
@@ -24,10 +35,12 @@ AGE_RECIPIENT=$(grep -o 'age1[a-z0-9]*' "$CERT_DIR/age-identity.txt")
 
 # Step 2: Fetch cert bundle and passphrase from Secrets Manager
 BUNDLE=$(aws secretsmanager get-secret-value \
+  --profile "$AWS_PROFILE" --region "$AWS_REGION" \
   --secret-id engram/mcp-client-cert \
   --query SecretString --output text)
 
 PASSPHRASE=$(aws secretsmanager get-secret-value \
+  --profile "$AWS_PROFILE" --region "$AWS_REGION" \
   --secret-id engram/mcp-client-cert-passphrase \
   --query SecretString --output text)
 

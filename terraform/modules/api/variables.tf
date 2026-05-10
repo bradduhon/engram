@@ -1,6 +1,5 @@
-# Copyright (c) 2026 Brad Duhon. All Rights Reserved.
-# Confidential and Proprietary.
-# Unauthorized copying of this file is strictly prohibited.
+# Copyright (c) 2026 Engram Contributors. All Rights Reserved.
+# Licensed under the MIT License. See LICENSE for details.
 
 terraform {
   required_providers {
@@ -21,6 +20,12 @@ variable "truststore_s3_uri" {
   type        = string
 }
 
+variable "truststore_version" {
+  description = "S3 object version ID of the truststore PEM. Update after running export_client_cert.py to force API Gateway to reload."
+  type        = string
+  default     = null
+}
+
 variable "lambda_invoke_arn" {
   description = "Memory handler Lambda invoke ARN for API Gateway integration"
   type        = string
@@ -32,8 +37,9 @@ variable "lambda_function_name" {
 }
 
 variable "route53_zone_id" {
-  description = "Route53 hosted zone ID for the server domain A alias record"
+  description = "Route53 hosted zone ID for the server domain A alias record. Optional -- set to null to skip record creation."
   type        = string
+  default     = null
 }
 
 variable "server_domain_name" {

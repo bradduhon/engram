@@ -1,6 +1,5 @@
-# Copyright (c) 2026 Brad Duhon. All Rights Reserved.
-# Confidential and Proprietary.
-# Unauthorized copying of this file is strictly prohibited.
+# Copyright (c) 2026 Engram Contributors. All Rights Reserved.
+# Licensed under the MIT License. See LICENSE for details.
 from __future__ import annotations
 
 import logging
@@ -42,11 +41,13 @@ def load_client_cert() -> CertBundle:
 
     cert_pem = _CERT_PATH.read_text()
 
-    identity = pyrage.x25519.Identity.from_str(
-        # age-identity.txt contains the AGE-SECRET-KEY-1... line plus a comment header.
-        # from_str accepts the full file content.
-        _AGE_IDENTITY_PATH.read_text().strip()
+    # age-identity.txt has comment lines (# ...) followed by the AGE-SECRET-KEY-1... line.
+    # from_str expects only the key line; strip comment lines.
+    key_line = next(
+        line for line in _AGE_IDENTITY_PATH.read_text().splitlines()
+        if line.startswith("AGE-SECRET-KEY-")
     )
+    identity = pyrage.x25519.Identity.from_str(key_line)
     key_pem = pyrage.decrypt(
         _KEY_AGE_PATH.read_bytes(),
         [identity],

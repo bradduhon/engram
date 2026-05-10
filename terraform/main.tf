@@ -1,6 +1,5 @@
-# Copyright (c) 2026 Brad Duhon. All Rights Reserved.
-# Confidential and Proprietary.
-# Unauthorized copying of this file is strictly prohibited.
+# Copyright (c) 2026 Engram Contributors. All Rights Reserved.
+# Licensed under the MIT License. See LICENSE for details.
 
 # Phase 1: VPC, subnets, S3 Gateway Endpoint, security groups
 module "networking" {
@@ -53,6 +52,7 @@ module "api" {
 
   server_cert_arn      = module.certificates.server_cert_arn
   truststore_s3_uri    = module.storage.truststore_s3_uri
+  truststore_version   = var.truststore_version
   lambda_invoke_arn    = module.compute.memory_handler_invoke_arn
   lambda_function_name = module.compute.memory_handler_function_name
   route53_zone_id      = var.route53_zone_id

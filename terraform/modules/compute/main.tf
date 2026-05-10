@@ -1,6 +1,5 @@
-# Copyright (c) 2026 Brad Duhon. All Rights Reserved.
-# Confidential and Proprietary.
-# Unauthorized copying of this file is strictly prohibited.
+# Copyright (c) 2026 Engram Contributors. All Rights Reserved.
+# Licensed under the MIT License. See LICENSE for details.
 
 terraform {
   required_providers {
@@ -53,12 +52,46 @@ resource "aws_vpc_endpoint_policy" "bedrock" {
           AWS = aws_iam_role.memory_handler.arn
         }
         Action = "bedrock:InvokeModel"
-        Resource = [
-          "arn:aws:bedrock:${var.aws_region}::foundation-model/amazon.titan-embed-text-v2:0",
-          "arn:aws:bedrock:${var.aws_region}::foundation-model/anthropic.claude-haiku-4-5-20251001"
-        ]
+        # Cross-region inference profiles (us.*) route through Bedrock's internal
+        # cross-account path; VPC endpoint policies cannot scope to inference profile
+        # ARNs the same way as foundation model ARNs. Scoping to the specific principal
+        # (memory handler role) already limits which identity can use this endpoint.
+        # The IAM role policy independently enforces model-level resource restrictions.
+        Resource = "*"
       }
     ]
+  })
+}
+
+# Bedrock control plane endpoint -- required for cross-region inference profile
+# resolution. InvokeModel with an inference profile ID calls the Bedrock control
+# plane (bedrock, not bedrock-runtime) to look up profile configuration before
+# routing to bedrock-runtime. Without this endpoint the call times out in the VPC.
+resource "aws_vpc_endpoint" "bedrock_control" {
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.bedrock"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = var.private_subnet_ids
+  security_group_ids  = [var.bedrock_endpoint_security_group_id]
+  private_dns_enabled = true
+
+  tags = merge(var.tags, { Name = "engram-bedrock-control-endpoint" })
+}
+
+resource "aws_vpc_endpoint_policy" "bedrock_control" {
+  vpc_endpoint_id = aws_vpc_endpoint.bedrock_control.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "AllowInferenceProfileLookup"
+      Effect = "Allow"
+      Principal = {
+        AWS = aws_iam_role.memory_handler.arn
+      }
+      Action   = ["bedrock:GetInferenceProfile"]
+      Resource = "*"
+    }]
   })
 }
 
@@ -89,12 +122,49 @@ resource "aws_vpc_endpoint_policy" "s3vectors" {
           "s3vectors:PutVectors",
           "s3vectors:QueryVectors",
           "s3vectors:GetVectors",
-          "s3vectors:DeleteVectors"
+          "s3vectors:DeleteVectors",
+          "s3vectors:ListVectors"
         ]
         Resource = [
           var.vector_bucket_arn,
           "${var.vector_bucket_arn}/index/*"
         ]
+      }
+    ]
+  })
+}
+
+# ---------------------------------------------------------------------------
+# Secrets Manager Interface Endpoint
+# Required so the memory handler (VPC-isolated) can fetch the client cert bundle
+# for mTLS cert pinning. No internet route exists in the VPC.
+# ---------------------------------------------------------------------------
+
+resource "aws_vpc_endpoint" "secretsmanager" {
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.secretsmanager"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = var.private_subnet_ids
+  security_group_ids  = [var.bedrock_endpoint_security_group_id]
+  private_dns_enabled = true
+
+  tags = merge(var.tags, { Name = "engram-secretsmanager-endpoint" })
+}
+
+resource "aws_vpc_endpoint_policy" "secretsmanager" {
+  vpc_endpoint_id = aws_vpc_endpoint.secretsmanager.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowMemoryHandlerGetSecret"
+        Effect = "Allow"
+        Principal = {
+          AWS = aws_iam_role.memory_handler.arn
+        }
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = "${var.client_cert_secret_arn}*"
       }
     ]
   })
@@ -127,16 +197,28 @@ resource "aws_iam_role_policy" "memory_handler" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "BedrockEmbedOnly"
-        Effect = "Allow"
-        Action = ["bedrock:InvokeModel"]
+        Sid      = "BedrockEmbedOnly"
+        Effect   = "Allow"
+        Action   = ["bedrock:InvokeModel"]
         Resource = "arn:aws:bedrock:${var.aws_region}::foundation-model/amazon.titan-embed-text-v2:0"
       },
       {
         Sid    = "BedrockHaikuSummarize"
         Effect = "Allow"
         Action = ["bedrock:InvokeModel"]
-        Resource = "arn:aws:bedrock:${var.aws_region}::foundation-model/anthropic.claude-haiku-4-5-20251001"
+        # Bedrock checks IAM against both the inference profile ARN and the underlying foundation model ARN.
+        # Foundation model ARNs use :: (no account ID) and require a wildcard region for cross-region profiles.
+        Resource = [
+          "arn:aws:bedrock:${var.aws_region}:${var.account_id}:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
+        ]
+      },
+      {
+        Sid    = "BedrockGetInferenceProfile"
+        Effect = "Allow"
+        Action = ["bedrock:GetInferenceProfile"]
+        # Required for cross-region inference profile resolution via bedrock control plane endpoint.
+        Resource = "*" # tfsec-ignore: aws-iam-no-policy-wildcards -- GetInferenceProfile doesn't support resource-level restrictions
       },
       {
         # S3 Vectors operations. Resource ARN uses s3vectors service prefix.
@@ -146,12 +228,20 @@ resource "aws_iam_role_policy" "memory_handler" {
           "s3vectors:PutVectors",
           "s3vectors:QueryVectors",
           "s3vectors:GetVectors",
-          "s3vectors:DeleteVectors"
+          "s3vectors:DeleteVectors",
+          "s3vectors:ListVectors"
         ]
         Resource = [
           var.vector_bucket_arn,
           "${var.vector_bucket_arn}/index/*"
         ]
+      },
+      {
+        Sid    = "SecretsReadClientCert"
+        Effect = "Allow"
+        Action = ["secretsmanager:GetSecretValue"]
+        # Wildcard suffix required: SM appends a 6-char random suffix to secret ARNs.
+        Resource = "${var.client_cert_secret_arn}*"
       },
       {
         Sid    = "Logging"
@@ -244,9 +334,9 @@ resource "aws_iam_role_policy" "cert_rotator" {
         Resource = "${var.client_cert_passphrase_secret_arn}*"
       },
       {
-        Sid    = "SecretsUpdateCert"
-        Effect = "Allow"
-        Action = ["secretsmanager:PutSecretValue"]
+        Sid      = "SecretsUpdateCert"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:PutSecretValue"]
         Resource = "${var.client_cert_secret_arn}*"
       },
       {
@@ -348,7 +438,10 @@ resource "aws_lambda_function" "memory_handler" {
       POWERTOOLS_SERVICE_NAME = local.memory_handler_name
       LOG_LEVEL               = "INFO"
       # S3 Vectors uses api.aws domain; explicit endpoint required for VPC routing.
-      S3VECTORS_ENDPOINT_URL  = "https://s3vectors.${var.aws_region}.api.aws"
+      S3VECTORS_ENDPOINT_URL = "https://s3vectors.${var.aws_region}.api.aws"
+      # Secret ID of the client cert bundle -- Lambda fetches the leaf cert and
+      # compares it byte-for-byte against the x-amzn-mtls-clientcert header.
+      CLIENT_CERT_SECRET_ID = var.client_cert_secret_arn
     }
   }
 
