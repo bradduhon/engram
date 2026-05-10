@@ -267,20 +267,24 @@ The plaintext private key is never written to disk. It is decrypted from Secrets
 
 ### Step 7: Configure the MCP server
 
-Add engram to `~/.claude/mcp_servers.json` (create the file if it does not exist):
+Add the `mcpServers` key to `~/.claude.json` (Claude Code's global config file):
 
 ```json
 {
-  "engram-memory": {
-    "command": "python",
-    "args": ["-m", "mcp_server.server"],
-    "cwd": "<absolute-path-to-engram-repo>",
-    "env": {
-      "MEMORY_API_URL": "https://memory.<your-domain>"
+  "mcpServers": {
+    "engram-memory": {
+      "command": "python",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "<absolute-path-to-engram-repo>",
+      "env": {
+        "MEMORY_API_URL": "https://memory.<your-domain>"
+      }
     }
   }
 }
 ```
+
+`~/.claude.json` likely already exists with other Claude Code settings. Add the `mcpServers` key without replacing the file contents.
 
 Restart Claude Code. Verify the three tools appear:
 
