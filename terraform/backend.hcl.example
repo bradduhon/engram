@@ -1,0 +1,7 @@
+# Copy to backend.hcl and fill in your values. backend.hcl is gitignored.
+# Usage: terraform init -backend-config=backend.hcl
+
+bucket         = "engram-tfstate-<YOUR_ACCOUNT_ID>"
+region         = "us-east-1"
+dynamodb_table = "engram-tflock"
+profile        = "<YOUR_AWS_PROFILE>"
