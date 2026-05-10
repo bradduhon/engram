@@ -20,12 +20,20 @@ variable "client_domain_name" {
 }
 
 variable "route53_zone_id" {
-  description = "Route53 hosted zone ID for creating the server domain A alias record"
+  description = "Route53 hosted zone ID for creating the server domain A alias record. Optional -- omit if DNS is managed outside Route53; create the A record manually after apply."
   type        = string
+  default     = null
 }
 
 variable "alert_email" {
   description = "Email address for SNS alarm notifications (requires manual confirmation after apply)"
   type        = string
 }
+
+variable "truststore_version" {
+  description = "S3 object version ID of mtls/truststore.pem -- update after running export_client_cert.py to force API Gateway to reload the truststore"
+  type        = string
+  default     = null
+}
+
 

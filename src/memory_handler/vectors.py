@@ -1,6 +1,5 @@
-# Copyright (c) 2026 Brad Duhon. All Rights Reserved.
-# Confidential and Proprietary.
-# Unauthorized copying of this file is strictly prohibited.
+# Copyright (c) 2026 Engram Contributors. All Rights Reserved.
+# Licensed under the MIT License. See LICENSE for details.
 from __future__ import annotations
 
 import logging
@@ -53,11 +52,12 @@ def query_vectors(
 ) -> list[VectorResult]:
     """Query the S3 Vector Table for nearest neighbors."""
     kwargs: dict = {
-        "bucketName": bucket,
+        "vectorBucketName": bucket,
         "indexName": index_name,
         "queryVector": {"float32": query_vector},
         "topK": top_k,
         "returnMetadata": True,
+        "returnDistance": True,
     }
     if filter_expression:
         kwargs["filter"] = filter_expression
@@ -67,11 +67,53 @@ def query_vectors(
     return [
         VectorResult(
             key=v["key"],
-            score=v["score"],
+            score=v.get("distance", 0.0),
             metadata=v.get("metadata", {}),
         )
         for v in response.get("vectors", [])
     ]
+
+
+def list_vectors(
+    bucket: str,
+    index_name: str,
+    s3vectors_client: object,
+    key_prefix: str | None = None,
+) -> list[VectorResult]:
+    """List all vectors in the index, optionally filtered by key prefix.
+
+    Uses the S3 Vectors ListVectors paginated API. Does not require a query
+    vector, making it suitable for bulk operations like summarization.
+    """
+    results: list[VectorResult] = []
+    next_token: str | None = None
+
+    while True:
+        kwargs: dict = {
+            "vectorBucketName": bucket,
+            "indexName": index_name,
+            "returnMetadata": True,
+        }
+        if next_token:
+            kwargs["nextToken"] = next_token
+
+        response = s3vectors_client.list_vectors(**kwargs)  # type: ignore[union-attr]
+
+        for v in response.get("vectors", []):
+            key: str = v["key"]
+            if key_prefix and not key.startswith(key_prefix):
+                continue
+            results.append(VectorResult(
+                key=key,
+                score=0.0,
+                metadata=v.get("metadata", {}),
+            ))
+
+        next_token = response.get("nextToken")
+        if not next_token:
+            break
+
+    return results
 
 
 def delete_vectors(

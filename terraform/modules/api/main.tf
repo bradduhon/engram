@@ -1,6 +1,5 @@
-# Copyright (c) 2026 Brad Duhon. All Rights Reserved.
-# Confidential and Proprietary.
-# Unauthorized copying of this file is strictly prohibited.
+# Copyright (c) 2026 Engram Contributors. All Rights Reserved.
+# Licensed under the MIT License. See LICENSE for details.
 
 # ---------------------------------------------------------------------------
 # HTTP API
@@ -115,7 +114,8 @@ resource "aws_apigatewayv2_domain_name" "memory" {
   }
 
   mutual_tls_authentication {
-    truststore_uri = var.truststore_s3_uri
+    truststore_uri     = var.truststore_s3_uri
+    truststore_version = var.truststore_version
   }
 
   tags = merge(var.tags, { Name = "engram-memory-domain" })
@@ -132,6 +132,8 @@ resource "aws_apigatewayv2_api_mapping" "memory" {
 # ---------------------------------------------------------------------------
 
 resource "aws_route53_record" "api" {
+  for_each = var.route53_zone_id != null ? toset(["record"]) : toset([])
+
   zone_id = var.route53_zone_id
   name    = var.server_domain_name
   type    = "A"
