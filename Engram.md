@@ -31,14 +31,13 @@ Call `recall_memory` before responding to the first message.
 
 ## During Conversation
 
-Call `store_memory` when any of the following occur:
+### Recall
 
-- A decision is made with rationale
-- A user preference or constraint is stated
-- Significant technical context is established (architecture, tooling, patterns)
-- The user says "remember", "save", "store this", or similar
+Call `recall_memory` (top_k: 3) before proposing an architecture, design, or tooling choice, and whenever the topic shifts domain or a new technology is introduced. Query the new context, not the session opener. Incorporate silently.
 
-Do not store the same concept more than once per session. If an earlier store covered it, skip.
+### Store
+
+Call `store_memory` when a decision with rationale, a preference, a constraint, or significant technical context is established, or when the user explicitly requests it. Skip if already stored this session.
 
 ---
 
