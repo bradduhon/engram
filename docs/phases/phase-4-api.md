@@ -2,12 +2,12 @@
 
 ## Overview
 
-Creates the API Gateway HTTP API with a custom domain, mTLS authentication, route definitions, and Lambda proxy integration. After this phase, the service is reachable over the internet via `https://memory.brad-duhon.com` with mTLS enforcement.
+Creates the API Gateway HTTP API with a custom domain, mTLS authentication, route definitions, and Lambda proxy integration. After this phase, the service is reachable over the internet via `https://memory.<your-domain>` with mTLS enforcement.
 
 ## Prerequisites
 
 - Phase 1 complete: S3 bucket with truststore PEM at `mtls/truststore.pem`
-- Phase 2 complete: ACM server cert ISSUED for `memory.brad-duhon.com`
+- Phase 2 complete: ACM server cert ISSUED for `memory.<your-domain>`
 - Phase 3 complete: Lambda function `engram-memory-handler` deployed and invocable
 
 ## Resources Created
@@ -19,7 +19,7 @@ File: `terraform/modules/api/main.tf`
 | Resource | Type | Key Config |
 |----------|------|------------|
 | `aws_apigatewayv2_api.memory` | HTTP API | Name: `engram-memory-api`, protocol: `HTTP` |
-| `aws_apigatewayv2_domain_name.memory` | Custom domain | Domain: `memory.brad-duhon.com`, cert ARN, mTLS truststore |
+| `aws_apigatewayv2_domain_name.memory` | Custom domain | Domain: `memory.<your-domain>`, cert ARN, mTLS truststore |
 | `aws_apigatewayv2_api_mapping.memory` | API mapping | Maps domain to API stage |
 | `aws_apigatewayv2_stage.default` | Stage | Name: `$default`, auto-deploy: `true`, throttling, access logging |
 | `aws_apigatewayv2_integration.lambda` | Integration | Lambda proxy, payload format v2 |
@@ -36,7 +36,7 @@ The `aws_apigatewayv2_domain_name` resource includes the mTLS block:
 
 ```hcl
 resource "aws_apigatewayv2_domain_name" "memory" {
-  domain_name = "memory.brad-duhon.com"
+  domain_name = "memory.<your-domain>"
 
   domain_name_configuration {
     certificate_arn = var.server_cert_arn
@@ -99,7 +99,7 @@ resource "aws_lambda_permission" "apigw" {
 ```hcl
 resource "aws_route53_record" "api" {
   zone_id = var.route53_zone_id
-  name    = "memory.brad-duhon.com"
+  name    = "memory.<your-domain>"
   type    = "A"
 
   alias {
@@ -131,7 +131,7 @@ resource "aws_route53_record" "api" {
 |--------|-------------|---------|
 | `api_id` | API Gateway ID | Phase 6 (observability, optional) |
 | `api_endpoint` | Default API endpoint URL | Reference (not used directly; custom domain is the entry point) |
-| `custom_domain_url` | `https://memory.brad-duhon.com` | Phase 5 (MCP server config), Phase 7 (hook script) |
+| `custom_domain_url` | `https://memory.<your-domain>` | Phase 5 (MCP server config), Phase 7 (hook script) |
 
 ## Security Controls
 
@@ -177,25 +177,25 @@ aws apigatewayv2 get-apis --query 'Items[?Name==`engram-memory-api`].ApiId' --ou
 # Expected: an API ID
 
 # Verify custom domain
-aws apigatewayv2 get-domain-name --domain-name memory.brad-duhon.com \
+aws apigatewayv2 get-domain-name --domain-name memory.<your-domain> \
   --query 'MutualTlsAuthentication.TruststoreUri'
 # Expected: s3://engram-memory-.../mtls/truststore.pem
 
 # Verify DNS resolves
-dig memory.brad-duhon.com +short
+dig memory.<your-domain> +short
 # Expected: API Gateway domain name
 
 # mTLS test -- successful auth (requires exported client cert files)
 # Using age-encrypted key from Phase 7, or plaintext key for testing:
 curl --cert /tmp/client.crt --key /tmp/client.key \
   --cacert /tmp/amazon-trust-services-ca.pem \
-  -X POST https://memory.brad-duhon.com/store \
+  -X POST https://memory.<your-domain>/store \
   -H "Content-Type: application/json" \
   -d '{"text":"e2e api test","scope":"global","conversation_id":"e2e-1"}'
 # Expected: {"stored": true, "id": "...", "scope": "global", ...}
 
 # mTLS test -- no client cert (should be rejected)
-curl -X POST https://memory.brad-duhon.com/store \
+curl -X POST https://memory.<your-domain>/store \
   -H "Content-Type: application/json" \
   -d '{"text":"should fail","scope":"global","conversation_id":"fail-1"}' \
   -w "\n%{http_code}\n"
@@ -204,7 +204,7 @@ curl -X POST https://memory.brad-duhon.com/store \
 # mTLS test -- recall
 curl --cert /tmp/client.crt --key /tmp/client.key \
   --cacert /tmp/amazon-trust-services-ca.pem \
-  -X POST https://memory.brad-duhon.com/recall \
+  -X POST https://memory.<your-domain>/recall \
   -H "Content-Type: application/json" \
   -d '{"query":"api test"}'
 # Expected: {"memories": [...], "total": ..., "query_ms": ...}

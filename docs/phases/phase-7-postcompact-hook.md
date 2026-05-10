@@ -6,7 +6,7 @@ Creates the Claude Code PostCompact hook that captures compaction summaries and 
 
 ## Prerequisites
 
-- Phase 4 complete: API Gateway reachable at `https://memory.brad-duhon.com` with mTLS
+- Phase 4 complete: API Gateway reachable at `https://memory.<your-domain>` with mTLS
 - Phase 2 complete: Secrets Manager populated with cert bundle and passphrase
 - `age` CLI installed (`apt install age` or from https://github.com/FiloSottile/age, BSD-3 license)
 - `jq` and `curl` installed
@@ -141,7 +141,7 @@ RESPONSE=$(curl --silent --show-error \
   --max-time 10 \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD" \
-  "https://memory.brad-duhon.com/store")
+  "https://memory.<your-domain>/store")
 
 # Log result to stderr (appears in Claude Code verbose log, not Claude's context)
 STATUS=$(echo "$RESPONSE" | jq -r '.stored // false')
@@ -284,7 +284,7 @@ curl --silent \
   --cert ~/.claude/certs/client.crt \
   --key <(age -d -i ~/.claude/certs/age-identity.txt ~/.claude/certs/client.key.age) \
   --cacert ~/.claude/certs/amazon-trust-services-ca.pem \
-  -X POST https://memory.brad-duhon.com/recall \
+  -X POST https://memory.<your-domain>/recall \
   -H "Content-Type: application/json" \
   -d '{"query":"phase 7 postcompact hook test"}' \
   | jq '.memories[0].text'

@@ -6,7 +6,7 @@ Creates the local Python MCP server that Claude Code and claude.ai connect to. T
 
 ## Prerequisites
 
-- Phase 4 complete: API Gateway reachable at `https://memory.brad-duhon.com` with mTLS
+- Phase 4 complete: API Gateway reachable at `https://memory.<your-domain>` with mTLS
 - Phase 2 complete: Secrets Manager populated with cert bundle and passphrase
 - Local AWS credentials configured with `secretsmanager:GetSecretValue` on `engram/mcp-client-cert*`
 - Python 3.12 installed locally
@@ -356,9 +356,9 @@ File: `~/.claude/mcp_servers.json` (or `~/.config/claude/mcp_servers.json` depen
   "engram-memory": {
     "command": "python",
     "args": ["-m", "mcp_server.server"],
-    "cwd": "/home/bduhon/MyProjects/engram",
+    "cwd": "<path-to-engram-repo>",
     "env": {
-      "MEMORY_API_URL": "https://memory.brad-duhon.com",
+      "MEMORY_API_URL": "https://memory.<your-domain>",
       "AWS_REGION": "us-east-1"
     }
   }
@@ -394,8 +394,8 @@ None.
    ```
 7. Test the server starts and lists tools:
    ```bash
-   cd /home/bduhon/MyProjects/engram
-   MEMORY_API_URL=https://memory.brad-duhon.com python -m mcp_server.server
+   cd <path-to-engram-repo>
+   MEMORY_API_URL=https://memory.<your-domain> python -m mcp_server.server
    ```
    (It will wait for stdin input via the MCP stdio protocol.)
 8. Add MCP config to `~/.claude/mcp_servers.json`.
@@ -406,7 +406,7 @@ None.
 
 ```bash
 # Verify MCP server starts without errors
-cd /home/bduhon/MyProjects/engram
+cd <path-to-engram-repo>
 timeout 5 python -c "from mcp_server.server import app; print('Server module loads')" 2>&1
 # Expected: "Server module loads"
 

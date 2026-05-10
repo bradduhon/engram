@@ -1,6 +1,5 @@
-# Copyright (c) 2026 Brad Duhon. All Rights Reserved.
-# Confidential and Proprietary.
-# Unauthorized copying of this file is strictly prohibited.
+# Copyright (c) 2026 Engram Contributors. All Rights Reserved.
+# Licensed under the MIT License. See LICENSE for details.
 from __future__ import annotations
 
 import json
@@ -11,7 +10,7 @@ import uuid
 from config import Config
 from embeddings import get_embedding
 from models import SummarizeRequest, SummarizeResponse
-from vectors import build_key_prefix, delete_vectors, put_vector, query_vectors
+from vectors import build_key_prefix, delete_vectors, list_vectors, put_vector
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +28,14 @@ def handle_summarize(
     """List recent memories, compress via Haiku, write summary, optionally delete originals."""
     prefix = build_key_prefix(body.scope, body.project_id)
 
-    zero_vector = [0.0] * 1024
-    results = query_vectors(
+    results = list_vectors(
         bucket=config.memory_bucket,
         index_name=config.vector_index_name,
-        query_vector=zero_vector,
-        top_k=100,
         s3vectors_client=s3vectors_client,
+        key_prefix=prefix,
     )
 
-    scope_results = [
-        r for r in results
-        if r.key.startswith(prefix) and r.metadata.get("type") == "memory"
-    ]
+    scope_results = [r for r in results if r.metadata.get("type") == "memory"]
 
     if not scope_results:
         return SummarizeResponse(

@@ -1,7 +1,6 @@
 #!/bin/bash
-# Copyright (c) 2026 Brad Duhon. All Rights Reserved.
-# Confidential and Proprietary.
-# Unauthorized copying of this file is strictly prohibited.
+# Copyright (c) 2026 Engram Contributors. All Rights Reserved.
+# Licensed under the MIT License. See LICENSE for details.
 #
 # Claude Code PostCompact hook. Reads the compaction JSON from stdin and
 # pushes the summary to the engram memory service via mTLS. The private
@@ -9,6 +8,10 @@
 # only in a kernel pipe buffer (fd), never as a named file on disk.
 #
 # Always exits 0 -- never blocks compaction on a memory write failure.
+#
+# Required environment variable:
+#   MEMORY_API_URL  -- base URL of the engram API (e.g. https://memory.example.com)
+#                      Set this in ~/.claude/settings.json under the hook's env block.
 set -euo pipefail
 
 CERT_DIR="$HOME/.claude/certs"
@@ -60,7 +63,7 @@ RESPONSE=$(curl --silent --show-error \
   --max-time 10 \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD" \
-  "https://memory.brad-duhon.com/store" 2>&1) || true
+  "${MEMORY_API_URL}/store" 2>&1) || true
 
 # Log result to stderr (Claude Code verbose log only -- not in Claude's context)
 STATUS=$(echo "$RESPONSE" | jq -r '.stored // false' 2>/dev/null || echo "false")

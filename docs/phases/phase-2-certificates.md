@@ -7,7 +7,7 @@ Creates the ACM certificates for mTLS (server and client), DNS validation record
 ## Prerequisites
 
 - Phase 1 complete: S3 bucket exists, VPC and networking deployed
-- Route53 hosted zone for `brad-duhon.com` exists and is authoritative
+- Route53 hosted zone for `<your-domain>` exists and is authoritative
 - Route53 hosted zone ID known
 
 ## Resources Created
@@ -18,8 +18,8 @@ File: `terraform/modules/certificates/main.tf`
 
 | Resource | Type | Key Config |
 |----------|------|------------|
-| `aws_acm_certificate.server` | ACM cert | Domain: `memory.brad-duhon.com`, validation: DNS |
-| `aws_acm_certificate.client` | ACM cert | Domain: `mcp-client.brad-duhon.com`, validation: DNS, `key_algorithm = "RSA_2048"` |
+| `aws_acm_certificate.server` | ACM cert | Domain: `memory.<your-domain>`, validation: DNS |
+| `aws_acm_certificate.client` | ACM cert | Domain: `mcp-client.<your-domain>`, validation: DNS, `key_algorithm = "RSA_2048"` |
 | `aws_route53_record.server_validation` | Route53 | CNAME for server cert DNS validation |
 | `aws_route53_record.client_validation` | Route53 | CNAME for client cert DNS validation |
 | `aws_acm_certificate_validation.server` | Validation | Waits for server cert to be ISSUED |
@@ -32,7 +32,7 @@ File: `terraform/modules/certificates/main.tf`
 1. Create the client cert via AWS CLI instead:
    ```bash
    aws acm request-certificate \
-     --domain-name mcp-client.brad-duhon.com \
+     --domain-name mcp-client.<your-domain> \
      --validation-method DNS \
      --key-algorithm RSA_2048 \
      --options CertificateTransparencyLoggingPreference=ENABLED
@@ -42,14 +42,14 @@ File: `terraform/modules/certificates/main.tf`
 2. Import the resulting cert ARN into Terraform as a data source:
    ```hcl
    data "aws_acm_certificate" "client" {
-     domain   = "mcp-client.brad-duhon.com"
+     domain   = "mcp-client.<your-domain>"
      statuses = ["ISSUED"]
    }
    ```
 
 3. Reference `data.aws_acm_certificate.client.arn` wherever the client cert ARN is needed.
 
-The server cert (`memory.brad-duhon.com`) is a standard non-exportable ACM cert and is fully supported by Terraform.
+The server cert (`memory.<your-domain>`) is a standard non-exportable ACM cert and is fully supported by Terraform.
 
 ### Shell Scripts
 
@@ -96,7 +96,7 @@ echo "  Passphrase: engram/mcp-client-cert-passphrase"
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `domain_name` | `string` | Base domain (default: `"brad-duhon.com"`) |
+| `domain_name` | `string` | Base domain (default: `"<your-domain>"`) |
 | `server_subdomain` | `string` | API subdomain (default: `"memory"`) |
 | `client_subdomain` | `string` | Client cert subdomain (default: `"mcp-client"`) |
 | `route53_zone_id` | `string` | Route53 hosted zone ID for DNS validation |
@@ -119,20 +119,20 @@ echo "  Passphrase: engram/mcp-client-cert-passphrase"
 - **Passphrase generation:** 32 bytes from `openssl rand`, base64 encoded. Stored in Secrets Manager, never in code or TF state.
 - **Secret shells:** Terraform creates empty `aws_secretsmanager_secret` resources. Values are populated out-of-band by `scripts/export-client-cert.sh`. This keeps the private key material out of Terraform state entirely.
 - **Secret recovery:** `recovery_window_in_days = 7` (default). Prevents accidental permanent deletion.
-- **No wildcard certs:** Each cert is for a specific FQDN. No `*.brad-duhon.com`.
+- **No wildcard certs:** Each cert is for a specific FQDN. No `*.<your-domain>`.
 
 ## Implementation Steps
 
 1. Determine your Route53 hosted zone ID:
    ```bash
-   aws route53 list-hosted-zones-by-name --dns-name brad-duhon.com \
+   aws route53 list-hosted-zones-by-name --dns-name <your-domain> \
      --query 'HostedZones[0].Id' --output text
    ```
 
 2. Create `terraform/modules/certificates/variables.tf` with the variables listed above.
 
 3. Create `terraform/modules/certificates/main.tf`:
-   - Server cert: `aws_acm_certificate` with `domain_name = "memory.brad-duhon.com"`, `validation_method = "DNS"`
+   - Server cert: `aws_acm_certificate` with `domain_name = "memory.<your-domain>"`, `validation_method = "DNS"`
    - Client cert: either `aws_acm_certificate` (if exportable supported) or note to create via CLI
    - DNS validation records using `for_each` on `domain_validation_options`
    - Validation resources to wait for ISSUED status
