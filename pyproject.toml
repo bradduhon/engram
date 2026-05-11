@@ -70,6 +70,9 @@ disallow_any_explicit = false
 module = ["moto.*", "mcp.*"]
 ignore_missing_imports = true
 
+[tool.setuptools.packages.find]
+where = [".", "src"]
+
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"

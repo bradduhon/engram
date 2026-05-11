@@ -94,6 +94,8 @@ You can also navigate directly to the model pages:
 
 ### Python (local MCP server only)
 
+The MCP server must be installed as a package so it is importable from any working directory. Claude Code spawns the server globally, and relying on `cwd` alone is not reliable across projects.
+
 ```bash
 cd <path-to-engram-repo>
 pip install -e ".[mcp-server]"
@@ -267,15 +269,14 @@ The plaintext private key is never written to disk. It is decrypted from Secrets
 
 ### Step 7: Configure the MCP server
 
-Add the `mcpServers` key to `~/.claude.json` (Claude Code's global config file):
+Add the `mcpServers` key to `~/.claude.json` (Claude Code's primary config file, in your home directory):
 
 ```json
 {
   "mcpServers": {
     "engram-memory": {
-      "command": "python",
+      "command": "<absolute-path-to-venv>/bin/python",
       "args": ["-m", "mcp_server.server"],
-      "cwd": "<absolute-path-to-engram-repo>",
       "env": {
         "MEMORY_API_URL": "https://memory.<your-domain>"
       }
@@ -284,7 +285,11 @@ Add the `mcpServers` key to `~/.claude.json` (Claude Code's global config file):
 }
 ```
 
+Use the full path to the Python interpreter from the virtualenv where you ran `pip install -e ".[mcp-server]"`. Do not use a bare `python` command -- Claude Code may resolve it against a different environment.
+
 `~/.claude.json` likely already exists with other Claude Code settings. Add the `mcpServers` key without replacing the file contents.
+
+> **Note:** The `cwd` field is not required when the package is installed via `pip install -e`. Omit it. If included and the working directory is wrong for any reason, it causes the server to fail silently in projects other than the engram repo.
 
 Restart Claude Code. Verify the three tools appear:
 
