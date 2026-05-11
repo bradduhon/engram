@@ -23,154 +23,6 @@ locals {
 }
 
 # ---------------------------------------------------------------------------
-# Bedrock Interface Endpoint
-# Placed in compute (not networking) to avoid circular dependency:
-# the endpoint policy references the memory handler IAM role created here.
-# ---------------------------------------------------------------------------
-
-resource "aws_vpc_endpoint" "bedrock" {
-  vpc_id              = var.vpc_id
-  service_name        = "com.amazonaws.${var.aws_region}.bedrock-runtime"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = var.private_subnet_ids
-  security_group_ids  = [var.bedrock_endpoint_security_group_id]
-  private_dns_enabled = true
-
-  tags = merge(var.tags, { Name = "engram-bedrock-endpoint" })
-}
-
-resource "aws_vpc_endpoint_policy" "bedrock" {
-  vpc_endpoint_id = aws_vpc_endpoint.bedrock.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowSpecificModels"
-        Effect = "Allow"
-        Principal = {
-          AWS = aws_iam_role.memory_handler.arn
-        }
-        Action = "bedrock:InvokeModel"
-        # Cross-region inference profiles (us.*) route through Bedrock's internal
-        # cross-account path; VPC endpoint policies cannot scope to inference profile
-        # ARNs the same way as foundation model ARNs. Scoping to the specific principal
-        # (memory handler role) already limits which identity can use this endpoint.
-        # The IAM role policy independently enforces model-level resource restrictions.
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-# Bedrock control plane endpoint -- required for cross-region inference profile
-# resolution. InvokeModel with an inference profile ID calls the Bedrock control
-# plane (bedrock, not bedrock-runtime) to look up profile configuration before
-# routing to bedrock-runtime. Without this endpoint the call times out in the VPC.
-resource "aws_vpc_endpoint" "bedrock_control" {
-  vpc_id              = var.vpc_id
-  service_name        = "com.amazonaws.${var.aws_region}.bedrock"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = var.private_subnet_ids
-  security_group_ids  = [var.bedrock_endpoint_security_group_id]
-  private_dns_enabled = true
-
-  tags = merge(var.tags, { Name = "engram-bedrock-control-endpoint" })
-}
-
-resource "aws_vpc_endpoint_policy" "bedrock_control" {
-  vpc_endpoint_id = aws_vpc_endpoint.bedrock_control.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid    = "AllowInferenceProfileLookup"
-      Effect = "Allow"
-      Principal = {
-        AWS = aws_iam_role.memory_handler.arn
-      }
-      Action   = ["bedrock:GetInferenceProfile"]
-      Resource = "*"
-    }]
-  })
-}
-
-resource "aws_vpc_endpoint" "s3vectors" {
-  vpc_id              = var.vpc_id
-  service_name        = "com.amazonaws.${var.aws_region}.s3vectors"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = var.private_subnet_ids
-  security_group_ids  = [var.bedrock_endpoint_security_group_id]
-  private_dns_enabled = true
-
-  tags = merge(var.tags, { Name = "engram-s3vectors-endpoint" })
-}
-
-resource "aws_vpc_endpoint_policy" "s3vectors" {
-  vpc_endpoint_id = aws_vpc_endpoint.s3vectors.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowMemoryHandlerVectorOps"
-        Effect = "Allow"
-        Principal = {
-          AWS = aws_iam_role.memory_handler.arn
-        }
-        Action = [
-          "s3vectors:PutVectors",
-          "s3vectors:QueryVectors",
-          "s3vectors:GetVectors",
-          "s3vectors:DeleteVectors",
-          "s3vectors:ListVectors"
-        ]
-        Resource = [
-          var.vector_bucket_arn,
-          "${var.vector_bucket_arn}/index/*"
-        ]
-      }
-    ]
-  })
-}
-
-# ---------------------------------------------------------------------------
-# Secrets Manager Interface Endpoint
-# Required so the memory handler (VPC-isolated) can fetch the client cert bundle
-# for mTLS cert pinning. No internet route exists in the VPC.
-# ---------------------------------------------------------------------------
-
-resource "aws_vpc_endpoint" "secretsmanager" {
-  vpc_id              = var.vpc_id
-  service_name        = "com.amazonaws.${var.aws_region}.secretsmanager"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = var.private_subnet_ids
-  security_group_ids  = [var.bedrock_endpoint_security_group_id]
-  private_dns_enabled = true
-
-  tags = merge(var.tags, { Name = "engram-secretsmanager-endpoint" })
-}
-
-resource "aws_vpc_endpoint_policy" "secretsmanager" {
-  vpc_endpoint_id = aws_vpc_endpoint.secretsmanager.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowMemoryHandlerGetSecret"
-        Effect = "Allow"
-        Principal = {
-          AWS = aws_iam_role.memory_handler.arn
-        }
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = "${var.client_cert_secret_arn}*"
-      }
-    ]
-  })
-}
-
-# ---------------------------------------------------------------------------
 # Memory handler IAM role
 # ---------------------------------------------------------------------------
 
@@ -252,18 +104,6 @@ resource "aws_iam_role_policy" "memory_handler" {
           "logs:PutLogEvents"
         ]
         Resource = "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/aws/lambda/${local.memory_handler_name}:*"
-      },
-      {
-        # ENI management for Lambda VPC execution. AWS does not support
-        # resource-level restrictions on these actions.
-        Sid    = "VPCNetworkInterface"
-        Effect = "Allow"
-        Action = [
-          "ec2:CreateNetworkInterface",
-          "ec2:DescribeNetworkInterfaces",
-          "ec2:DeleteNetworkInterface"
-        ]
-        Resource = "*" # tfsec-ignore: aws-iam-no-policy-wildcards
       },
       {
         Sid    = "XRayPutTrace"
@@ -426,18 +266,13 @@ resource "aws_lambda_function" "memory_handler" {
     mode = "Active"
   }
 
-  vpc_config {
-    subnet_ids         = var.private_subnet_ids
-    security_group_ids = [var.lambda_security_group_id]
-  }
-
   environment {
     variables = {
       MEMORY_BUCKET           = var.vector_bucket_name
       VECTOR_INDEX_NAME       = var.vector_index_name
       POWERTOOLS_SERVICE_NAME = local.memory_handler_name
       LOG_LEVEL               = "INFO"
-      # S3 Vectors uses api.aws domain; explicit endpoint required for VPC routing.
+      # S3 Vectors uses api.aws domain; explicit endpoint URL required by the SDK.
       S3VECTORS_ENDPOINT_URL = "https://s3vectors.${var.aws_region}.api.aws"
       # Secret ID of the client cert bundle -- Lambda fetches the leaf cert and
       # compares it byte-for-byte against the x-amzn-mtls-clientcert header.
