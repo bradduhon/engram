@@ -1,20 +1,11 @@
 # Copyright (c) 2026 Engram Contributors. All Rights Reserved.
 # Licensed under the MIT License. See LICENSE for details.
 
-# Phase 1: VPC, subnets, S3 Gateway Endpoint, security groups
-module "networking" {
-  source = "./modules/networking"
-
-  aws_region = var.aws_region
-  tags       = {}
-}
-
 # Phase 1: Artifacts S3 bucket (truststore), S3 Vectors bucket + index
 module "storage" {
   source = "./modules/storage"
 
   account_id          = local.account_id
-  vpc_endpoint_id     = module.networking.s3_gateway_endpoint_id
   deployer_account_id = local.account_id
   tags                = {}
 }
@@ -28,22 +19,18 @@ module "certificates" {
   tags               = {}
 }
 
-# Phase 3: Lambda functions, IAM roles, Bedrock VPC endpoint
+# Phase 3: Lambda functions, IAM roles
 module "compute" {
   source = "./modules/compute"
 
-  vector_bucket_name                 = module.storage.vector_bucket_name
-  vector_bucket_arn                  = module.storage.vector_bucket_arn
-  vpc_id                             = module.networking.vpc_id
-  private_subnet_ids                 = module.networking.private_subnet_ids
-  lambda_security_group_id           = module.networking.lambda_security_group_id
-  bedrock_endpoint_security_group_id = module.networking.bedrock_endpoint_security_group_id
-  client_cert_arn                    = module.certificates.client_cert_arn
-  client_cert_secret_arn             = module.certificates.client_cert_secret_arn
-  client_cert_passphrase_secret_arn  = module.certificates.client_cert_passphrase_secret_arn
-  aws_region                         = var.aws_region
-  account_id                         = local.account_id
-  tags                               = {}
+  vector_bucket_name                = module.storage.vector_bucket_name
+  vector_bucket_arn                 = module.storage.vector_bucket_arn
+  client_cert_arn                   = module.certificates.client_cert_arn
+  client_cert_secret_arn            = module.certificates.client_cert_secret_arn
+  client_cert_passphrase_secret_arn = module.certificates.client_cert_passphrase_secret_arn
+  aws_region                        = var.aws_region
+  account_id                        = local.account_id
+  tags                              = {}
 }
 
 # Phase 4: API Gateway, custom domain, mTLS, routes

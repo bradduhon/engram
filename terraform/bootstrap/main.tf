@@ -73,7 +73,7 @@ resource "aws_s3_bucket_policy" "tfstate" {
         Principal = {
           AWS = "*"
         }
-        Action   = "s3:*"
+        Action = "s3:*"
         Resource = [
           aws_s3_bucket.tfstate.arn,
           "${aws_s3_bucket.tfstate.arn}/*"
