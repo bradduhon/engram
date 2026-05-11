@@ -473,6 +473,24 @@ When recalling with a `project_id`, the service searches both the project scope 
 
 ---
 
+## Known Operational Gotchas
+
+### Removing Lambda from a VPC requires a two-step apply
+
+If you re-add VPC config to Lambda and later want to remove it, Terraform will attempt to modify the Lambda and destroy the networking resources in parallel. Lambda hyperplane ENIs are held `in-use` by AWS for up to 45+ minutes after removal, which causes subnet and security group destroys to time out.
+
+Prevent this by staging the apply:
+
+```bash
+# Step 1: detach Lambda from VPC first, wait for ENIs to release
+terraform apply -target=module.compute
+
+# Step 2: destroy networking resources once Lambda is fully detached
+terraform apply
+```
+
+---
+
 ## Cert Rotation
 
 ACM auto-renews the client certificate before expiry. When it does:
