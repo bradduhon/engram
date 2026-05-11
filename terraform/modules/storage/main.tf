@@ -79,7 +79,11 @@ resource "aws_s3_bucket_policy" "artifacts" {
         Resource = "arn:aws:s3:::${local.artifacts_bucket_name}/mtls/truststore.pem"
       },
       {
-        Sid       = "DenyNonVPCEndpoint"
+        # Deny access from external AWS accounts. Same-account SSO session ARNs
+        # have rotating suffixes, so account-level matching is used instead of
+        # exact principal ARNs. API Gateway service principal is excluded via the
+        # explicit Allow above (Allow wins over Deny for same-account service principals).
+        Sid       = "DenyExternalAccounts"
         Effect    = "Deny"
         Principal = "*"
         Action    = "s3:*"
@@ -88,14 +92,7 @@ resource "aws_s3_bucket_policy" "artifacts" {
           "arn:aws:s3:::${local.artifacts_bucket_name}/*"
         ]
         Condition = {
-          # AND logic: deny fires only when BOTH are true (not from VPC endpoint
-          # AND not from the deployer account). Allows access when from the VPC
-          # endpoint OR when the caller is from this account (handles SSO session
-          # ARNs, which include a rotating suffix preventing exact-match principals).
-          # API Gateway service principal is excluded from this deny via the explicit
-          # Allow above (Allow wins over Deny for same-account service principals).
           StringNotEquals = {
-            "aws:SourceVpce"       = var.vpc_endpoint_id
             "aws:PrincipalAccount" = var.deployer_account_id
           }
         }
