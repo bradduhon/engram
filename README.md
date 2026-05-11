@@ -26,6 +26,8 @@ engram-memory-handler Lambda  (Python 3.12, arm64)
 
 Lambda communicates with AWS services over their public endpoints. Access is controlled by IAM policies and resource policies.
 
+> **VPC deployment reference:** If you prefer full network isolation (Lambda in a private VPC with Interface Endpoints for Bedrock, S3 Vectors, and Secrets Manager), the last commit with that configuration is [`5e2eaea`](https://github.com/bradduhon/engram/commit/5e2eaea). That architecture costs ~$58/month in VPC endpoint fees but keeps all compute traffic off the public internet.
+
 **mTLS two-layer approach:**
 1. **API Gateway truststore** - contains the Amazon RSA 2048 M04 intermediate CA and self-signed Amazon Root CA 1. API Gateway validates that the client cert was signed by a trusted CA before routing to Lambda.
 2. **Lambda cert pinning** - after API Gateway validates the chain, the Lambda handler fetches the exact leaf cert PEM from Secrets Manager and compares it byte-for-byte against the cert presented by the client (available in `requestContext.authentication.clientCert.clientCertPem`). This ensures only the specific ACM cert exported for this deployment is accepted, even though the truststore would technically trust any cert signed by Amazon RSA 2048 M04.
