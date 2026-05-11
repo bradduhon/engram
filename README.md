@@ -18,13 +18,13 @@ mcp_server/   (runs locally on your machine)
 API Gateway HTTP API  (custom domain, mTLS enforced)
     |  Lambda proxy  (cert pinning enforced in handler)
     v
-engram-memory-handler Lambda  (Python 3.12, arm64, VPC)
-    |-- Bedrock Titan Embed v2      (via Interface Endpoint)
-    |-- S3 Vectors                  (via Interface Endpoint)
-    +-- Secrets Manager             (via Interface Endpoint)
+engram-memory-handler Lambda  (Python 3.12, arm64)
+    |-- Bedrock Titan Embed v2      (public endpoint)
+    |-- S3 Vectors                  (public endpoint)
+    +-- Secrets Manager             (public endpoint)
 ```
 
-All Lambda traffic is VPC-private. No NAT gateway, no internet access from compute.
+Lambda communicates with AWS services over their public endpoints. Access is controlled by IAM policies and resource policies.
 
 **mTLS two-layer approach:**
 1. **API Gateway truststore** - contains the Amazon RSA 2048 M04 intermediate CA and self-signed Amazon Root CA 1. API Gateway validates that the client cert was signed by a trusted CA before routing to Lambda.
@@ -59,7 +59,7 @@ sudo apt install jq curl
 
 You need:
 - An AWS account with a CLI profile configured (`aws configure`)
-- Permissions to create: IAM roles, Lambda, VPC, ACM certificates, API Gateway, S3, Secrets Manager, Bedrock, CloudWatch, SNS, EventBridge
+- Permissions to create: IAM roles, Lambda, ACM certificates, API Gateway, S3, Secrets Manager, Bedrock, CloudWatch, SNS, EventBridge
 - Bedrock model access enabled in your target region for:
   - `amazon.titan-embed-text-v2:0`
   - `anthropic.claude-haiku-4-5-20251001-v1:0`
@@ -182,7 +182,7 @@ Add all CNAME records to your DNS zone (Route53, Cloudflare, etc.). ACM will iss
 
 After `terraform apply` completes, all infrastructure is live:
 - API Gateway with mTLS at `https://memory.<your-domain>`
-- Lambda memory handler in VPC
+- Lambda memory handler
 - S3 Vectors index for semantic search
 - CloudWatch alarms and SNS alerts
 - EventBridge daily summarizer (2:00 AM UTC)
@@ -506,8 +506,8 @@ The `age-identity.txt` file is never rotated. Only `client.crt` and `client.key.
 |-------|---------|
 | Transport (layer 1) | mTLS, API Gateway validates client cert chain against a truststore containing the Amazon RSA 2048 M04 intermediate CA and self-signed Amazon Root CA 1 |
 | Transport (layer 2) | Lambda cert pinning, handler fetches the exact leaf cert PEM from Secrets Manager and compares it byte-for-byte against `requestContext.authentication.clientCert.clientCertPem`. Only the specific ACM cert exported for this deployment is accepted |
-| Network | Lambda in VPC private subnets, no internet. S3 via Gateway Endpoint, Bedrock and Secrets Manager via Interface Endpoints |
-| S3 access | Bucket policy denies all requests not sourced from the S3 VPC Gateway Endpoint |
+| Network | Lambda outside VPC; AWS service access via public endpoints. IAM least-privilege enforced on all service calls |
+| S3 access | Bucket policy denies requests from external AWS accounts. TLS enforced via `aws:SecureTransport` deny |
 | Data at rest | SSE-KMS (aws/s3 managed key). Secrets Manager default encryption |
 | Private key (server) | Held in Secrets Manager, fetched to MCP server process memory, written to a `0o600` temp file for the httpx connection lifetime only |
 | Private key (hook) | age-encrypted on disk. Decrypted via process substitution, plaintext exists only in a kernel pipe buffer, never as a named file |
@@ -523,10 +523,9 @@ engram/
   terraform/
     bootstrap/        # One-time TF state backend (local state, run once)
     modules/
-      networking/     # VPC, subnets, S3 Gateway Endpoint, security groups
       storage/        # S3 artifacts bucket, S3 Vectors bucket + index
       certificates/   # ACM server + client certs, Secrets Manager shells
-      compute/        # Lambda functions, IAM roles, Bedrock + S3V + SM endpoints
+      compute/        # Lambda functions, IAM roles
       api/            # API Gateway, custom domain, mTLS, routes
       observability/  # CloudWatch alarms, SNS, EventBridge scheduler
     main.tf           # Root module, wires all modules

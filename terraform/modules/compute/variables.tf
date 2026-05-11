@@ -17,26 +17,6 @@ variable "vector_index_name" {
   default     = "memories"
 }
 
-variable "vpc_id" {
-  description = "VPC ID -- used to create the Bedrock Interface Endpoint"
-  type        = string
-}
-
-variable "private_subnet_ids" {
-  description = "Private subnet IDs for Lambda VPC config and Bedrock endpoint"
-  type        = list(string)
-}
-
-variable "lambda_security_group_id" {
-  description = "Lambda security group ID"
-  type        = string
-}
-
-variable "bedrock_endpoint_security_group_id" {
-  description = "Security group ID for the Bedrock Interface Endpoint"
-  type        = string
-}
-
 variable "client_cert_arn" {
   description = "ACM exportable client certificate ARN (for cert rotator)"
   type        = string

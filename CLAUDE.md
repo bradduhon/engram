@@ -43,9 +43,9 @@ All AWS resources use the `engram-` prefix.
 ## Security Rules
 
 1. **No secrets in code or TF state.** Lambda env vars contain bucket names and model IDs, never credentials or keys.
-2. **S3 bucket policy:** Explicit deny for requests not sourced from the S3 VPC Gateway Endpoint (`aws:SourceVpce` condition).
+2. **S3 bucket policy:** Explicit deny for requests from external AWS accounts (`aws:PrincipalAccount` condition). TLS enforced via separate `aws:SecureTransport` deny.
 3. **IAM:** Scoped to exact actions and resource ARNs. Explicit deny on Bedrock admin/discovery APIs (`ListFoundationModels`, `GetFoundationModel`, `CreateModelCustomizationJob`).
-4. **Network isolation:** Lambda in VPC private subnets. No NAT, no internet. S3 via Gateway Endpoint. Bedrock via Interface Endpoint with endpoint policy scoped to Titan Embed v2 + Haiku model ARNs.
+4. **Network:** Lambda runs outside VPC, communicating with AWS services (Bedrock, S3 Vectors, Secrets Manager) over their public endpoints. Access controlled by IAM least-privilege and resource policies.
 5. **mTLS:** API Gateway validates the client cert against a truststore containing only the leaf certificate of the specific ACM exportable client cert. Pinning the leaf cert means no other cert -- including others signed by the same CA -- is trusted. Direct Lambda invocations (scheduler, cert rotator) are controlled by IAM and Lambda resource policies.
 6. **Encryption at rest:** S3 SSE-KMS (`aws/s3` managed key). Secrets Manager default encryption.
 7. **Private key handling:** Secrets Manager for server-side. age encryption for on-disk hook key. MCP server holds key in process memory only, never writes to disk.
