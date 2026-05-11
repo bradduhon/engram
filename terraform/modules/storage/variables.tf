@@ -6,13 +6,8 @@ variable "account_id" {
   type        = string
 }
 
-variable "vpc_endpoint_id" {
-  description = "S3 Gateway Endpoint ID used in bucket policy to restrict access to VPC only"
-  type        = string
-}
-
 variable "deployer_account_id" {
-  description = "AWS account ID exempted from VPC-endpoint-only policy for Terraform applies and operational access"
+  description = "AWS account ID allowed through the DenyExternalAccounts bucket policy for Terraform applies and operational access"
   type        = string
 }
 
