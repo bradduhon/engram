@@ -11,8 +11,10 @@ from aws_lambda_powertools.event_handler import APIGatewayHttpResolver
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from config import Config
-from models import RecallRequest, StoreRequest, SummarizeRequest
+from delete import handle_delete
+from models import DeleteRequest, RecallRequest, SearchRelatedRequest, StoreRequest, SummarizeRequest
 from recall import handle_recall
+from search_related import handle_search_related
 from store import handle_store
 from summarize import handle_summarize
 
@@ -62,6 +64,20 @@ def store_memory() -> dict:
 def recall_memory() -> dict:
     body = app.current_event.json_body
     result = handle_recall(RecallRequest(**body), _config, _bedrock_client, _s3vectors_client)
+    return result.model_dump()
+
+
+@app.post("/delete")
+def delete_memory() -> dict:
+    body = app.current_event.json_body
+    result = handle_delete(DeleteRequest(**body), _config, _s3vectors_client)
+    return result.model_dump()
+
+
+@app.post("/search_related")
+def search_related_memories() -> dict:
+    body = app.current_event.json_body
+    result = handle_search_related(SearchRelatedRequest(**body), _config, _s3vectors_client)
     return result.model_dump()
 
 

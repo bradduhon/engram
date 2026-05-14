@@ -35,5 +35,15 @@ class MemoryAPIClient:
         response.raise_for_status()
         return response.json()  # type: ignore[no-any-return]
 
+    def delete(self, payload: dict) -> dict:
+        response = self._client.post(f"{self._base_url}/delete", json=payload)
+        response.raise_for_status()
+        return response.json()  # type: ignore[no-any-return]
+
+    def search_related(self, payload: dict) -> dict:
+        response = self._client.post(f"{self._base_url}/search_related", json=payload)
+        response.raise_for_status()
+        return response.json()  # type: ignore[no-any-return]
+
     def close(self) -> None:
         self._client.close()

@@ -59,4 +59,4 @@ All AWS resources use the `engram-` prefix.
 - **Integration tests** (`tests/integration/`): require deployed infrastructure. Marker-gated with `@pytest.mark.integration`. Run with `pytest tests/integration/ --run-integration`.
 - **Test naming:** `test_{method}_{scenario}_{expected_outcome}`
 - **Terraform:** `terraform validate` + `tflint` on every change.
-- **Smoke test:** `scripts/smoke-test.sh` for end-to-end mTLS store/recall verification.
+- **Smoke test:** `MEMORY_API_URL=https://... python3 scripts/smoke_test.py` for end-to-end mTLS store/recall/search_related verification.
