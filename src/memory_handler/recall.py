@@ -37,6 +37,7 @@ def handle_recall(
             id=r.key.split("/")[-1],
             text=r.metadata.get("text", ""),
             score=r.score,
+            relevance_score=round(1.0 - (r.score / 2.0), 4),
             scope=r.metadata.get("scope", "global"),
             created_at=r.metadata.get("created_at", ""),
             type=r.metadata.get("type", "memory"),

@@ -21,11 +21,30 @@ You have persistent memory via three MCP tools: `store_memory`, `recall_memory`,
 
 Call `recall_memory` before responding to the first message.
 
+- **Context Reset**: Derive "Where do we stand?" and recent task state.
 - Query: derive from the opening message or inferred session topic
 - `top_k`: 5
 - Include `project_id` if in a project
 - If in a project, also recall without `project_id` (captures global preferences)
 - Incorporate results silently. Do not announce or narrate the recall.
+
+---
+
+## Relevance Score Semantics
+
+Each `recall_memory` result includes two score fields:
+
+| Field | Meaning | Range | Better |
+|---|---|---|---|
+| `score` | Cosine distance from S3 Vectors | 0–2 | Lower |
+| `relevance_score` | Normalized similarity: `1 - (score / 2)` | 0–1 | Higher |
+
+**Confidence thresholds:**
+- `relevance_score ≥ 0.8` — Strong match. Use the result directly.
+- `0.6 ≤ relevance_score < 0.8` — Soft match. Cross-reference with a second query or call `search_related_findings` on the best result to retrieve temporal context.
+- `relevance_score < 0.6` — Weak match. Expand query before proceeding.
+
+A PostToolUse hook automatically outputs a nudge when results are empty or best score < 0.6.
 
 ---
 
@@ -35,9 +54,17 @@ Call `recall_memory` before responding to the first message.
 
 Call `recall_memory` (top_k: 3) before proposing an architecture, design, or tooling choice, and whenever the topic shifts domain or a new technology is introduced. Query the new context, not the session opener. Incorporate silently.
 
+### Search Related Findings
+
+Call `search_related_findings` when a recall result scores 0.6–0.8 and you need surrounding context from the same session. Pass the `id` from the best `MemoryResult` plus its `scope` and `project_id`.
+
 ### Store
 
 Call `store_memory` when a decision with rationale, a preference, a constraint, or significant technical context is established, or when the user explicitly requests it. Skip if already stored this session.
+
+**Rationale Capture**: For all major architectural shifts, explicitly store the "Why".
+- Include trade-offs, alternatives, and drivers (Security/Cost).
+- This supports future "Lab" article generation.
 
 ---
 
