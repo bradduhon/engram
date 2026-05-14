@@ -75,3 +75,42 @@ SUMMARIZE_MEMORIES_SCHEMA: dict = {
     },
     "required": ["scope"],
 }
+
+DELETE_MEMORY_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "memory_id": {"type": "string", "description": "The ID of the memory to delete (UUID from recall_memory result)"},
+        "scope": {
+            "type": "string",
+            "enum": ["project", "global"],
+            "description": "Scope of the memory to delete",
+        },
+        "project_id": {
+            "type": "string",
+            "description": "Project identifier (required if scope is 'project')",
+        },
+    },
+    "required": ["memory_id", "scope"],
+}
+
+SEARCH_RELATED_FINDINGS_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "memory_id": {"type": "string", "description": "The ID of the anchor memory (UUID from recall_memory result)"},
+        "scope": {
+            "type": "string",
+            "enum": ["project", "global"],
+            "description": "Scope of the anchor memory",
+        },
+        "project_id": {
+            "type": "string",
+            "description": "Project identifier (required if scope is 'project')",
+        },
+        "window_minutes": {
+            "type": "integer",
+            "description": "Time window in minutes around the anchor memory to search for neighbors",
+            "default": 5,
+        },
+    },
+    "required": ["memory_id", "scope"],
+}

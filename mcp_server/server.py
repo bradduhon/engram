@@ -14,7 +14,7 @@ from mcp.types import TextContent, Tool
 
 from mcp_server.api_client import MemoryAPIClient
 from mcp_server.cert_loader import load_client_cert, write_temp_cert_files
-from mcp_server.tools import RECALL_MEMORY_SCHEMA, STORE_MEMORY_SCHEMA, SUMMARIZE_MEMORIES_SCHEMA
+from mcp_server.tools import DELETE_MEMORY_SCHEMA, RECALL_MEMORY_SCHEMA, SEARCH_RELATED_FINDINGS_SCHEMA, STORE_MEMORY_SCHEMA, SUMMARIZE_MEMORIES_SCHEMA
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 logger = logging.getLogger(__name__)
@@ -78,6 +78,23 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema=SUMMARIZE_MEMORIES_SCHEMA,
         ),
+        Tool(
+            name="delete_memory",
+            description=(
+                "Permanently delete a memory by ID. Use to remove stale, duplicate, or incorrect "
+                "memories. Requires the memory_id from a prior recall_memory result."
+            ),
+            inputSchema=DELETE_MEMORY_SCHEMA,
+        ),
+        Tool(
+            name="search_related_findings",
+            description=(
+                "Find memories stored temporally near an anchor memory. Use after recall_memory "
+                "returns a relevant result to retrieve surrounding context (decisions made in the "
+                "same session, related rationale stored minutes apart)."
+            ),
+            inputSchema=SEARCH_RELATED_FINDINGS_SCHEMA,
+        ),
     ]
 
 
@@ -92,6 +109,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = client.recall(arguments)
         elif name == "summarize_memories":
             result = client.summarize(arguments)
+        elif name == "delete_memory":
+            result = client.delete(arguments)
+        elif name == "search_related_findings":
+            result = client.search_related(arguments)
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
