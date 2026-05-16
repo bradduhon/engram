@@ -17,19 +17,6 @@ You have persistent memory via three MCP tools: `store_memory`, `recall_memory`,
 
 ---
 
-## Session Start
-
-Call `recall_memory` before responding to the first message.
-
-- **Context Reset**: Derive "Where do we stand?" and recent task state.
-- Query: derive from the opening message or inferred session topic
-- `top_k`: 5
-- Include `project_id` if in a project
-- If in a project, also recall without `project_id` (captures global preferences)
-- Incorporate results silently. Do not announce or narrate the recall.
-
----
-
 ## Relevance Score Semantics
 
 Each `recall_memory` result includes two score fields:
