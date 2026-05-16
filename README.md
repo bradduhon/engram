@@ -36,6 +36,31 @@ Lambda communicates with AWS services over their public endpoints. Access is con
 
 > **VPC deployment reference:** If you prefer full network isolation (Lambda in a private VPC with Interface Endpoints for Bedrock, S3 Vectors, and Secrets Manager), the last commit with that configuration is [`5e2eaea`](https://github.com/bradduhon/engram/commit/5e2eaea). That architecture costs ~$58/month in VPC endpoint fees.
 
+## The Enforcement Problem
+
+**Claude Code will, by default, not use Engram at session start.** This is not a configuration gap — it is a fundamental property of how large language models process instructions.
+
+CLAUDE.md instructions, however explicit, are treated as preferences. The model weighs them against its training priors at inference time. A directive like "call recall_memory before responding" competes with the model's strong prior to respond immediately. The prior wins — consistently — unless every available enforcement surface is saturated simultaneously.
+
+There is no `PreResponse` hook in Claude Code's event model. No mechanism exists to block the model from generating text before a tool call completes. The hook architecture fires on tool events only, not on text generation events. This means you cannot mechanically gate a response behind a tool call. You can only increase the probability of compliance through redundant, overlapping instructions.
+
+Engram addresses this with three layers working in parallel:
+
+| Layer | Mechanism | What it does |
+|-------|-----------|--------------|
+| 1 — Load-order gate | `[HARD REQUIREMENT]` block at line 1 of `~/.claude/CLAUDE.md` | First instruction the model reads. Refusal-framed: "DO NOT generate any response until..." |
+| 2 — Context injection | `SessionStart` hook injects a mandatory recall directive into conversation context | Repeats the requirement at runtime, immediately before the first user message |
+| 3 — Quality enforcement | `PostToolUse` hook on `recall_memory` | Fires after every recall call, validates relevance scores, forces query expansion below 0.6 |
+
+Even with all three layers active, compliance is probabilistic. The model can still violate the gate. What the layered approach does is make violation the path of higher resistance — it requires the model to ignore instructions in CLAUDE.md, the injected context directive, and the structural framing of the HARD REQUIREMENT block simultaneously.
+
+If you observe the session gate being skipped, the cause is almost always one of:
+- The `[HARD REQUIREMENT]` block is not at the top of the global CLAUDE.md (it must precede all other content)
+- The SessionStart hook failed silently (check `MEMORY_API_URL` is set in `~/.claude/settings.json` env block)
+- The MCP server is down or the tool is not auto-allowed in permissions
+
+---
+
 ## Hooks and Automation
 
 Engram ships three Claude Code hooks that automate memory operations without user intervention. Each hook is wired in `~/.claude/settings.json` and references scripts in this repository's `hooks/` directory.
