@@ -88,6 +88,18 @@ resource "aws_apigatewayv2_route" "summarize" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
+resource "aws_apigatewayv2_route" "search_related" {
+  api_id    = aws_apigatewayv2_api.memory.id
+  route_key = "POST /search_related"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "delete" {
+  api_id    = aws_apigatewayv2_api.memory.id
+  route_key = "POST /delete"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
 # ---------------------------------------------------------------------------
 # Lambda resource-based policy -- allow API Gateway to invoke
 # ---------------------------------------------------------------------------
