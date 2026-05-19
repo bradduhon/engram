@@ -13,6 +13,18 @@ from vectors import query_vectors
 logger = logging.getLogger(__name__)
 
 
+def _build_filter(scope_filter: str | None, project_id: str | None) -> dict | None:
+    """Build an S3 Vectors metadata filter from recall scope parameters."""
+    if scope_filter == "global":
+        return {"equals": {"key": "scope", "value": "global"}}
+    if scope_filter == "project" or project_id:
+        conditions: list[dict] = [{"equals": {"key": "scope", "value": "project"}}]
+        if project_id:
+            conditions.append({"equals": {"key": "project_id", "value": project_id}})
+        return {"and": conditions} if len(conditions) > 1 else conditions[0]
+    return None
+
+
 def handle_recall(
     body: RecallRequest,
     config: Config,
@@ -30,6 +42,7 @@ def handle_recall(
         query_vector=query_embedding,
         top_k=body.top_k,
         s3vectors_client=s3vectors_client,
+        filter_expression=_build_filter(body.scope_filter, body.project_id),
     )
 
     memories = [
