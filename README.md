@@ -60,7 +60,7 @@ If you observe the session context missing memories, the cause is almost always 
 
 ## Hooks and Automation
 
-Engram ships three Claude Code hooks that automate memory operations without user intervention. Each hook is wired in `~/.claude/settings.json` and references scripts in this repository's `hooks/` directory.
+Engram ships four Claude Code hooks. Each hook is wired in `~/.claude/settings.json` and references scripts in this repository's `hooks/` directory.
 
 ### UserPromptSubmit Hook — `session-start-engram.sh`
 
@@ -70,13 +70,21 @@ Calls the Engram recall API directly over mTLS and injects the memory content in
 
 This is the enforcement mechanism: recall happens unconditionally at the hook layer, before Claude processes the message. CLAUDE.md instructions are advisory; this hook is not.
 
-### PostCompact Hook — `post-compact-memory.sh`
+### UserPromptSubmit Hook — `prompt-context-engram.sh`
+
+**Event:** `UserPromptSubmit` (fires on every user message after the first)
+
+Classifies the incoming prompt and skips affirmations, short continuations, and single-word responses. For substantive messages, extracts a keyword query, calls the Engram recall API directly over mTLS, and injects relevant memories as a `[ENGRAM MID-SESSION CONTEXT]` block into the system-reminder. This catches domain shifts mid-session — when the topic changes, the context updates without requiring a tool call from Claude.
+
+Complements `session-start-engram.sh`: the session-start hook pre-loads broad project context at conversation open; this hook narrows recall to the specific content of each new prompt.
+
+### PostCompact Hook — `compact-reminder.sh`
 
 **Event:** `PostCompact` (fires when Claude Code compresses the conversation context, either automatically or via `/compact`)
 
-Reads the compaction summary from stdin and stores it as a memory via the Engram API over mTLS. The private key is decrypted inline via process substitution so plaintext exists only in a kernel pipe buffer, never as a named file. Memories are tagged with `trigger: compact_auto` or `trigger: compact_manual` and scoped to the current project or global.
+Injects a re-orientation block into the system-reminder after context compaction. The block restates security invariants, IAM blast-radius gates, and hard stops that Claude may lose when the context window is compressed. Ends with an instruction to call `recall_memory` with the current project name to re-establish task context.
 
-This means Claude builds memory passively over the lifetime of every conversation without any explicit action from the user.
+Compaction summaries are **not** automatically stored as memories. Compact summaries are Claude's compression artifacts, not curated knowledge — their signal-to-noise is low and they are often stale within the same session. Use the `/hygiene` skill to deliberately store any decision, rule, or discovery that came out of the compacted work.
 
 ### PostToolUse Hook — `recall-confidence-check.sh`
 
@@ -104,10 +112,6 @@ Once the MCP server is running, Claude Code has five tools available:
 | `project` | Project-specific context, decisions, architecture | Conversations in that project |
 
 When recalling with a `project_id`, the service searches both the project scope and global scope and returns the combined top results.
-
-### Automatic Memory via PostCompact
-
-The PostCompact hook fires whenever Claude Code compresses the conversation context. It extracts the summary and stores it as a memory automatically. This means context accumulates passively across every conversation without explicit user action.
 
 ---
 
@@ -407,12 +411,21 @@ Replace `<absolute-path-to-engram-repo>` with the actual path (e.g. `/home/user/
     "UserPromptSubmit": [
       {
         "matcher": "",
-        "condition": "session.messages.length == 0",
         "hooks": [
           {
             "type": "command",
             "command": "bash <absolute-path-to-engram-repo>/hooks/session-start-engram.sh",
             "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash <absolute-path-to-engram-repo>/hooks/prompt-context-engram.sh",
+            "timeout": 10
           }
         ]
       }
@@ -435,7 +448,7 @@ Replace `<absolute-path-to-engram-repo>` with the actual path (e.g. `/home/user/
         "hooks": [
           {
             "type": "command",
-            "command": "<absolute-path-to-engram-repo>/hooks/post-compact-memory.sh",
+            "command": "bash <absolute-path-to-engram-repo>/hooks/compact-reminder.sh",
             "timeout": 15
           }
         ]
@@ -445,7 +458,7 @@ Replace `<absolute-path-to-engram-repo>` with the actual path (e.g. `/home/user/
 }
 ```
 
-> **Note:** `MEMORY_API_URL` is required by both `session-start-engram.sh` and `post-compact-memory.sh` — both call the API directly over mTLS. The recall-confidence-check hook operates on MCP tool output only and does not use it.
+> **Note:** `MEMORY_API_URL` is required by `session-start-engram.sh` and `prompt-context-engram.sh` — both call the API directly over mTLS. The recall-confidence-check and compact-reminder hooks do not use it.
 
 > **Note:** If you already have other hooks configured (e.g. `PreToolUse`, other `PostToolUse` matchers), merge the Engram entries into your existing arrays rather than replacing them.
 
@@ -572,9 +585,13 @@ engram/
     cert_rotator/     # Lambda: ACM cert re-export to Secrets Manager on renewal
   mcp_server/         # Local MCP server (runs as Claude Code child process)
   hooks/
-    session-start-engram.sh     # UserPromptSubmit hook: calls recall API, injects context
-    post-compact-memory.sh      # PostCompact hook: stores compaction summaries
-    recall-confidence-check.sh  # PostToolUse hook: validates recall quality
+    session-start-engram.sh     # UserPromptSubmit hook (first message): loads project + global context
+    prompt-context-engram.sh    # UserPromptSubmit hook (every message): mid-session recall on topic shift
+    recall-confidence-check.sh  # PostToolUse hook: validates recall quality, forces query expansion
+    compact-reminder.sh         # PostCompact hook: re-orientation block + security invariant checklist
+  skills/
+    hygiene/
+      SKILL.md                  # /hygiene slash command: classify, generalize, and gate store_memory calls
   scripts/
     export_client_cert.py       # Export ACM client cert into Secrets Manager
     setup-certs.sh              # One-time local cert setup (age-encrypted key)

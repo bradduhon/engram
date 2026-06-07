@@ -14,7 +14,7 @@ from mcp.types import TextContent, Tool
 
 from mcp_server.api_client import MemoryAPIClient
 from mcp_server.cert_loader import load_client_cert, write_temp_cert_files
-from mcp_server.tools import DELETE_MEMORY_SCHEMA, RECALL_MEMORY_SCHEMA, SEARCH_RELATED_FINDINGS_SCHEMA, STORE_MEMORY_SCHEMA, SUMMARIZE_MEMORIES_SCHEMA
+from mcp_server.tools import DELETE_MEMORY_SCHEMA, PRUNE_MEMORIES_SCHEMA, RECALL_MEMORY_SCHEMA, SEARCH_RELATED_FINDINGS_SCHEMA, STORE_MEMORY_SCHEMA, SUMMARIZE_MEMORIES_SCHEMA
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 logger = logging.getLogger(__name__)
@@ -95,6 +95,15 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema=SEARCH_RELATED_FINDINGS_SCHEMA,
         ),
+        Tool(
+            name="prune_memories",
+            description=(
+                "Delete memories by type and age. Always call with dry_run=true first to review "
+                "candidates. Defaults to pruning 'task'-type memories older than 30 days. "
+                "Never prune 'decision', 'rule', or 'discovery' types without explicit user approval."
+            ),
+            inputSchema=PRUNE_MEMORIES_SCHEMA,
+        ),
     ]
 
 
@@ -104,15 +113,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     try:
         if name == "store_memory":
-            result = client.store(arguments)
+            result = await client.store(arguments)
         elif name == "recall_memory":
-            result = client.recall(arguments)
+            result = await client.recall(arguments)
         elif name == "summarize_memories":
-            result = client.summarize(arguments)
+            result = await client.summarize(arguments)
         elif name == "delete_memory":
-            result = client.delete(arguments)
+            result = await client.delete(arguments)
         elif name == "search_related_findings":
-            result = client.search_related(arguments)
+            result = await client.search_related(arguments)
+        elif name == "prune_memories":
+            result = await client.prune(arguments)
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
