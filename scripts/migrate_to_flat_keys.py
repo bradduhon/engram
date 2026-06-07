@@ -30,6 +30,7 @@ Env vars required:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import re
@@ -40,7 +41,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 _PUT_BATCH = 500
-_GET_BATCH = 100
+_EMBED_MODEL = "amazon.titan-embed-text-v2:0"
 
 # Matches: global/memories/{uuid-or-summary-uuid}
 _GLOBAL_RE = re.compile(r"^global/memories/(.+)$")
@@ -99,6 +100,7 @@ def main() -> None:
         region_name=region,
         endpoint_url=os.environ.get("S3VECTORS_ENDPOINT_URL"),
     )
+    bedrock = boto3.client("bedrock-runtime", region_name=region)
 
     # --- Step 1: list all vectors ---
     logger.info("Listing all vectors ...")
@@ -148,20 +150,22 @@ def main() -> None:
         logger.info("Dry run complete. %d vectors would be migrated.", len(to_migrate))
         return
 
-    # --- Step 3: fetch embeddings for vectors to migrate ---
-    logger.info("Fetching embeddings for %d vectors ...", len(to_migrate))
+    # --- Step 3: re-embed text via Bedrock (S3 Vectors does not expose raw float values) ---
+    logger.info("Re-embedding %d vectors via Bedrock Titan Embed v2 ...", len(to_migrate))
     key_to_vector: dict[str, list[float]] = {}
-    for i in range(0, len(to_migrate), _GET_BATCH):
-        batch = to_migrate[i : i + _GET_BATCH]
-        resp = client.get_vectors(
-            vectorBucketName=bucket,
-            indexName=index_name,
-            keys=batch,
-            returnMetadata=False,
+    for i, key in enumerate(to_migrate, 1):
+        text = all_metadata[key].get("text", "")
+        if not text:
+            logger.warning("  [%d/%d] No text in metadata for %s -- skipping", i, len(to_migrate), key)
+            continue
+        resp = bedrock.invoke_model(
+            modelId=_EMBED_MODEL,
+            body=json.dumps({"inputText": text, "dimensions": 1024, "normalize": True}),
         )
-        for v in resp.get("vectors", []):
-            key_to_vector[v["key"]] = v.get("data", {}).get("float32", [])
-        logger.info("  fetched %d/%d", min(i + _GET_BATCH, len(to_migrate)), len(to_migrate))
+        body = json.loads(resp["body"].read())
+        key_to_vector[key] = body["embedding"]
+        if i % 10 == 0 or i == len(to_migrate):
+            logger.info("  embedded %d/%d", i, len(to_migrate))
 
     # --- Step 4: put at new keys ---
     logger.info("Writing %d vectors at new flat keys ...", len(to_migrate))
