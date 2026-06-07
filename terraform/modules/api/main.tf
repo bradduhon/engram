@@ -100,6 +100,12 @@ resource "aws_apigatewayv2_route" "delete" {
   target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
+resource "aws_apigatewayv2_route" "prune" {
+  api_id    = aws_apigatewayv2_api.memory.id
+  route_key = "POST /prune"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
 # ---------------------------------------------------------------------------
 # Lambda resource-based policy -- allow API Gateway to invoke
 # ---------------------------------------------------------------------------

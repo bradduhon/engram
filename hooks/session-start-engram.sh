@@ -34,7 +34,11 @@ format_memories() {
   local json="$1"
   echo "$json" | jq -r '
     .memories[]
-    | "[\(.scope | ascii_upcase)] \(.text | gsub("\n"; " "))"
+    | (if (.tags | map(select(startswith("project:"))) | length) > 0
+       then "PROJECT"
+       else "GLOBAL"
+       end) as $label
+    | "[\($label)] \(.text | gsub("\n"; " "))"
   ' 2>/dev/null || true
 }
 
@@ -45,41 +49,33 @@ if git_root=$(git rev-parse --show-toplevel 2>/dev/null); then
   PROJECT_ID=$(basename "$git_root")
 fi
 
-# ── Recall ────────────────────────────────────────────────────────────────────
-
-PROJECT_JSON='{"memories":[]}'
-GLOBAL_JSON='{"memories":[]}'
+# ── Build weights: boost current project memories to surface first ─────────────
 
 if [[ -n "$PROJECT_ID" ]]; then
-  PROJECT_PAYLOAD=$(jq -n \
-    --arg q  "project state decisions status architecture ${PROJECT_ID}" \
+  WEIGHTS=$(jq -n \
     --arg pid "$PROJECT_ID" \
-    '{"query": $q, "top_k": 8, "project_id": $pid}')
-  PROJECT_JSON=$(recall "$PROJECT_PAYLOAD")
+    '{("project:" + $pid): 1.5, "scope:project": 1.2}')
+else
+  WEIGHTS='{}'
 fi
 
-GLOBAL_PAYLOAD=$(jq -n \
-  --arg q "active projects priorities conventions decisions" \
-  '{"query": $q, "top_k": 3, "scope_filter": "global"}')
-GLOBAL_JSON=$(recall "$GLOBAL_PAYLOAD")
+# ── Recall — single call with weight boosting ─────────────────────────────────
 
-PROJECT_COUNT=$(echo "$PROJECT_JSON" | jq '.memories | length' 2>/dev/null || echo 0)
-GLOBAL_COUNT=$(echo "$GLOBAL_JSON"  | jq '.memories | length' 2>/dev/null || echo 0)
+PAYLOAD=$(jq -n \
+  --arg q       "project state decisions status architecture priorities conventions" \
+  --argjson w   "$WEIGHTS" \
+  '{"query": $q, "top_k": 10, "weights": $w}')
+
+RESPONSE=$(recall "$PAYLOAD")
+MEMORY_COUNT=$(echo "$RESPONSE" | jq '.memories | length' 2>/dev/null || echo 0)
 
 # ── Output ────────────────────────────────────────────────────────────────────
 
-echo "[ENGRAM CONTEXT — ${PROJECT_COUNT} project memories, ${GLOBAL_COUNT} global memories]"
+echo "[ENGRAM CONTEXT — ${MEMORY_COUNT} memories]"
 
-if [[ "$PROJECT_COUNT" -gt 0 ]]; then
+if [[ "$MEMORY_COUNT" -gt 0 ]]; then
   echo ""
-  echo "Project memories (${PROJECT_ID}):"
-  format_memories "$PROJECT_JSON" | nl -ba -w2 -s". "
-fi
-
-if [[ "$GLOBAL_COUNT" -gt 0 ]]; then
-  echo ""
-  echo "Global memories:"
-  format_memories "$GLOBAL_JSON" | nl -ba -w2 -s". "
+  format_memories "$RESPONSE" | nl -ba -w2 -s". "
 fi
 
 echo ""

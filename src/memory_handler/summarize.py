@@ -10,7 +10,7 @@ import uuid
 from config import Config
 from embeddings import get_embedding
 from models import SummarizeRequest, SummarizeResponse
-from vectors import build_key_prefix, delete_vectors, list_vectors, put_vector
+from vectors import delete_vectors, list_vectors, parse_tags, put_vector
 
 logger = logging.getLogger(__name__)
 
@@ -25,24 +25,26 @@ def handle_summarize(
     bedrock_client: object,
     s3vectors_client: object,
 ) -> SummarizeResponse:
-    """List recent memories, compress via Haiku, write summary, optionally delete originals."""
-    prefix = build_key_prefix(body.scope, body.project_id)
-
-    results = list_vectors(
+    """List memories, optionally filtered by tag_filter, compress via Haiku, write summary."""
+    all_vectors = list_vectors(
         bucket=config.memory_bucket,
         index_name=config.vector_index_name,
         s3vectors_client=s3vectors_client,
-        key_prefix=prefix,
     )
 
-    scope_results = [r for r in results if r.metadata.get("type") == "memory"]
+    # Filter to type=memory only; apply tag_filter if specified (all tags must match)
+    tag_filter_set = set(body.tag_filter)
+    scope_results = [
+        r for r in all_vectors
+        if r.metadata.get("type") == "memory"
+        and (not tag_filter_set or tag_filter_set.issubset(set(parse_tags(r.metadata))))
+    ]
 
     if not scope_results:
         return SummarizeResponse(
             summary_id="",
             pruned_count=0,
             summary_token_count=0,
-            scope=body.scope,
         )
 
     memory_texts = [r.metadata.get("text", "") for r in scope_results]
@@ -64,9 +66,12 @@ def handle_summarize(
     summary_token_count = len(summary_text.split())
 
     summary_id = str(uuid.uuid4())
-    summary_key = f"{prefix}/summary-{summary_id}"
+    summary_key = f"memories/summary-{summary_id}"
     summary_embedding = get_embedding(summary_text, bedrock_client, config.embed_model_id)
     created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    # Carry forward tag_filter as summary tags so the summary is retrievable by the same filters
+    summary_tags = list(body.tag_filter) if body.tag_filter else []
 
     put_vector(
         bucket=config.memory_bucket,
@@ -75,8 +80,7 @@ def handle_summarize(
         vector=summary_embedding,
         metadata={
             "text": summary_text,
-            "scope": body.scope,
-            "project_id": body.project_id or "",
+            "tags": ",".join(summary_tags),
             "conversation_id": "",
             "trigger": "summarizer",
             "type": "summary",
@@ -96,11 +100,10 @@ def handle_summarize(
         )
         logger.info("Deleted %d original memories after summarization", len(original_keys))
 
-    logger.info("Created summary %s from %d memories", summary_id, len(scope_results))
+    logger.info("Created summary %s from %d memories (tag_filter=%s)", summary_id, len(scope_results), body.tag_filter)
 
     return SummarizeResponse(
         summary_id=summary_id,
         pruned_count=len(scope_results),
         summary_token_count=summary_token_count,
-        scope=body.scope,
     )

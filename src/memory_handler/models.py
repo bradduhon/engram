@@ -4,43 +4,36 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 
 class StoreRequest(BaseModel):
     text: str
-    scope: Literal["project", "global"]
-    project_id: str | None = None
-    conversation_id: str
+    tags: list[str] = []
+    conversation_id: str = "unknown"
     trigger: str = "explicit"
-
-    @model_validator(mode="after")
-    def project_id_required_for_project_scope(self) -> StoreRequest:
-        if self.scope == "project" and not self.project_id:
-            raise ValueError("project_id is required when scope is 'project'")
-        return self
+    memory_type: Literal["task", "decision", "discovery", "rule", "preference", "context"] = "context"
 
 
 class StoreResponse(BaseModel):
     stored: bool
     id: str
-    scope: str
+    tags: list[str]
     token_count: int
 
 
 class RecallRequest(BaseModel):
     query: str
-    project_id: str | None = None
     top_k: int = 5
-    scope_filter: Literal["project", "global"] | None = None
+    weights: dict[str, float] = {}
 
 
 class MemoryResult(BaseModel):
     id: str
     text: str
     score: float
-    relevance_score: float  # Normalized similarity: 1 - (cosine_distance / 2), range 0-1. Higher = better.
-    scope: str
+    relevance_score: float  # Weighted relevance: base_relevance * tag weight multipliers. Higher = better.
+    tags: list[str]
     created_at: str
     type: str
 
@@ -53,14 +46,6 @@ class RecallResponse(BaseModel):
 
 class DeleteRequest(BaseModel):
     memory_id: str
-    scope: Literal["project", "global"]
-    project_id: str | None = None
-
-    @model_validator(mode="after")
-    def project_id_required_for_project_scope(self) -> DeleteRequest:
-        if self.scope == "project" and not self.project_id:
-            raise ValueError("project_id is required when scope is 'project'")
-        return self
 
 
 class DeleteResponse(BaseModel):
@@ -70,15 +55,7 @@ class DeleteResponse(BaseModel):
 
 class SearchRelatedRequest(BaseModel):
     memory_id: str
-    scope: Literal["project", "global"]
-    project_id: str | None = None
     window_minutes: int = 5
-
-    @model_validator(mode="after")
-    def project_id_required_for_project_scope(self) -> SearchRelatedRequest:
-        if self.scope == "project" and not self.project_id:
-            raise ValueError("project_id is required when scope is 'project'")
-        return self
 
 
 class SearchRelatedResponse(BaseModel):
@@ -88,8 +65,7 @@ class SearchRelatedResponse(BaseModel):
 
 
 class SummarizeRequest(BaseModel):
-    scope: Literal["project", "global"]
-    project_id: str | None = None
+    tag_filter: list[str] = []  # If provided, only summarize memories with ALL matching tags
     delete_originals: bool = False
 
 
@@ -97,4 +73,16 @@ class SummarizeResponse(BaseModel):
     summary_id: str
     pruned_count: int
     summary_token_count: int
-    scope: str
+
+
+class PruneRequest(BaseModel):
+    tag_filter: list[str] = []  # If provided, only prune memories with ALL matching tags
+    older_than_days: int = 30
+    memory_types: list[Literal["task", "decision", "discovery", "rule", "preference", "context"]] = ["task"]
+    dry_run: bool = False
+
+
+class PruneResponse(BaseModel):
+    deleted: int
+    dry_run: bool
+    candidates: list[str]  # memory IDs that were (or would be) deleted
