@@ -6,18 +6,15 @@ STORE_MEMORY_SCHEMA: dict = {
     "type": "object",
     "properties": {
         "text": {"type": "string", "description": "The memory text to store"},
-        "scope": {
-            "type": "string",
-            "enum": ["project", "global"],
-            "description": "Memory scope: 'project' for project-specific, 'global' for cross-project",
-        },
-        "project_id": {
-            "type": "string",
-            "description": "Project identifier (required if scope is 'project')",
-        },
-        "conversation_id": {
-            "type": "string",
-            "description": "Current conversation identifier",
+        "tags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Tag list for this memory. Use namespaced tags: 'project:engram', "
+                "'scope:global', 'scope:project', 'technology:terraform', etc. "
+                "memory_type tag is auto-injected from the memory_type field."
+            ),
+            "default": [],
         },
         "trigger": {
             "type": "string",
@@ -27,30 +24,39 @@ STORE_MEMORY_SCHEMA: dict = {
             ),
             "default": "explicit",
         },
+        "memory_type": {
+            "type": "string",
+            "enum": ["task", "decision", "discovery", "rule", "preference", "context"],
+            "description": (
+                "Classify the memory: 'task' for completed work items (prunable), "
+                "'decision' for architectural/design choices, 'discovery' for learned facts, "
+                "'rule' for enforced standards, 'preference' for user preferences, "
+                "'context' for general context (default)."
+            ),
+            "default": "context",
+        },
     },
-    "required": ["text", "scope", "conversation_id"],
+    "required": ["text"],
 }
 
 RECALL_MEMORY_SCHEMA: dict = {
     "type": "object",
     "properties": {
         "query": {"type": "string", "description": "Semantic search query"},
-        "project_id": {
-            "type": "string",
-            "description": (
-                "Project identifier. If provided without scope_filter, restricts results to "
-                "project-scoped memories for this project only."
-            ),
-        },
         "top_k": {
             "type": "integer",
             "description": "Number of results to return",
             "default": 5,
         },
-        "scope_filter": {
-            "type": "string",
-            "enum": ["project", "global"],
-            "description": "Filter results to a specific scope",
+        "weights": {
+            "type": "object",
+            "additionalProperties": {"type": "number"},
+            "description": (
+                "Tag weight multipliers for re-ranking. Keys are tag strings (e.g. 'project:engram', "
+                "'memory_type:decision'). Values > 1.0 boost matching memories; < 1.0 suppress. "
+                "Example: {\"project:engram\": 1.5, \"memory_type:decision\": 1.2}"
+            ),
+            "default": {},
         },
     },
     "required": ["query"],
@@ -59,14 +65,14 @@ RECALL_MEMORY_SCHEMA: dict = {
 SUMMARIZE_MEMORIES_SCHEMA: dict = {
     "type": "object",
     "properties": {
-        "scope": {
-            "type": "string",
-            "enum": ["project", "global"],
-            "description": "Which scope to summarize",
-        },
-        "project_id": {
-            "type": "string",
-            "description": "Project identifier (required if scope is 'project')",
+        "tag_filter": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "If provided, only summarize memories that have ALL matching tags. "
+                "Empty list summarizes all memories."
+            ),
+            "default": [],
         },
         "delete_originals": {
             "type": "boolean",
@@ -74,38 +80,58 @@ SUMMARIZE_MEMORIES_SCHEMA: dict = {
             "default": False,
         },
     },
-    "required": ["scope"],
+    "required": [],
 }
 
 DELETE_MEMORY_SCHEMA: dict = {
     "type": "object",
     "properties": {
-        "memory_id": {"type": "string", "description": "The ID of the memory to delete (UUID from recall_memory result)"},
-        "scope": {
+        "memory_id": {
             "type": "string",
-            "enum": ["project", "global"],
-            "description": "Scope of the memory to delete",
-        },
-        "project_id": {
-            "type": "string",
-            "description": "Project identifier (required if scope is 'project')",
+            "description": "The ID of the memory to delete (UUID from recall_memory result)",
         },
     },
-    "required": ["memory_id", "scope"],
+    "required": ["memory_id"],
+}
+
+PRUNE_MEMORIES_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "tag_filter": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "If provided, only prune memories that have ALL matching tags. "
+                "Example: [\"scope:project\", \"project:engram\"] to prune only engram project memories."
+            ),
+            "default": [],
+        },
+        "older_than_days": {
+            "type": "integer",
+            "description": "Only prune memories older than this many days",
+            "default": 30,
+        },
+        "memory_types": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["task", "decision", "discovery", "rule", "preference", "context"]},
+            "description": "Memory types eligible for pruning. Defaults to ['task'] only.",
+            "default": ["task"],
+        },
+        "dry_run": {
+            "type": "boolean",
+            "description": "If true, return candidates without deleting. Always run dry_run=true first.",
+            "default": True,
+        },
+    },
+    "required": [],
 }
 
 SEARCH_RELATED_FINDINGS_SCHEMA: dict = {
     "type": "object",
     "properties": {
-        "memory_id": {"type": "string", "description": "The ID of the anchor memory (UUID from recall_memory result)"},
-        "scope": {
+        "memory_id": {
             "type": "string",
-            "enum": ["project", "global"],
-            "description": "Scope of the anchor memory",
-        },
-        "project_id": {
-            "type": "string",
-            "description": "Project identifier (required if scope is 'project')",
+            "description": "The ID of the anchor memory (UUID from recall_memory result)",
         },
         "window_minutes": {
             "type": "integer",
@@ -113,5 +139,5 @@ SEARCH_RELATED_FINDINGS_SCHEMA: dict = {
             "default": 5,
         },
     },
-    "required": ["memory_id", "scope"],
+    "required": ["memory_id"],
 }

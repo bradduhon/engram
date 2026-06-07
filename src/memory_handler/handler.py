@@ -12,7 +12,8 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from config import Config
 from delete import handle_delete
-from models import DeleteRequest, RecallRequest, SearchRelatedRequest, StoreRequest, SummarizeRequest
+from models import DeleteRequest, PruneRequest, RecallRequest, SearchRelatedRequest, StoreRequest, SummarizeRequest
+from prune import handle_prune
 from recall import handle_recall
 from search_related import handle_search_related
 from store import handle_store
@@ -85,6 +86,13 @@ def search_related_memories() -> dict:
 def summarize_memories() -> dict:
     body = app.current_event.json_body
     result = handle_summarize(SummarizeRequest(**body), _config, _bedrock_client, _s3vectors_client)
+    return result.model_dump()
+
+
+@app.post("/prune")
+def prune_memories() -> dict:
+    body = app.current_event.json_body
+    result = handle_prune(PruneRequest(**body), _config, _s3vectors_client)
     return result.model_dump()
 
 

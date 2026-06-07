@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from models import MemoryResult, SearchRelatedRequest, SearchRelatedResponse
-from vectors import VectorResult, build_key_prefix, list_vectors
+from vectors import VectorResult, list_vectors, parse_tags
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +31,10 @@ def handle_search_related(
 
     cfg: Config = config  # type: ignore[assignment]
 
-    prefix = build_key_prefix(body.scope, body.project_id)
     all_vectors: list[VectorResult] = list_vectors(
         bucket=cfg.memory_bucket,
         index_name=cfg.vector_index_name,
         s3vectors_client=s3vectors_client,
-        key_prefix=prefix,
     )
 
     anchor_ts: datetime | None = None
@@ -46,7 +44,7 @@ def handle_search_related(
             break
 
     if anchor_ts is None:
-        logger.warning("Anchor memory %s not found in prefix %s", body.memory_id, prefix)
+        logger.warning("Anchor memory %s not found", body.memory_id)
         return SearchRelatedResponse(anchor_id=body.memory_id, neighbors=[], total=0)
 
     delta = timedelta(minutes=body.window_minutes)
@@ -66,7 +64,7 @@ def handle_search_related(
                     text=v.metadata.get("text", ""),
                     score=0.0,
                     relevance_score=0.0,
-                    scope=v.metadata.get("scope", body.scope),
+                    tags=parse_tags(v.metadata),
                     created_at=v.metadata.get("created_at", ""),
                     type=v.metadata.get("type", "memory"),
                 )
