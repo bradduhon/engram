@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 
 from models import DeleteRequest, DeleteResponse
-from vectors import build_key_prefix, delete_vectors
+from vectors import delete_vectors, memory_key
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +21,7 @@ def handle_delete(
 
     cfg: Config = config  # type: ignore[assignment]
 
-    prefix = build_key_prefix(body.scope, body.project_id)
-    key = f"{prefix}/{body.memory_id}"
+    key = memory_key(body.memory_id)
 
     delete_vectors(
         bucket=cfg.memory_bucket,
@@ -31,5 +30,5 @@ def handle_delete(
         s3vectors_client=s3vectors_client,
     )
 
-    logger.info("Deleted memory %s (scope=%s)", body.memory_id, body.scope)
+    logger.info("Deleted memory %s", body.memory_id)
     return DeleteResponse(deleted=True, id=body.memory_id)

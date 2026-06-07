@@ -27,7 +27,6 @@ def _bedrock_client(summary_text: str = "Compressed summary.") -> MagicMock:
     def _invoke_model(modelId: str, body: str) -> dict:
         if "titan" in modelId.lower() or "embed" in modelId.lower():
             return {"body": BytesIO(json.dumps({"embedding": [0.1] * 1024}).encode())}
-        # Haiku response
         return {
             "body": BytesIO(json.dumps({
                 "content": [{"text": summary_text}]
@@ -51,34 +50,33 @@ def _s3vectors_with_memories(memories: list[VectorResult]) -> MagicMock:
     return client
 
 
-_GLOBAL_MEMORIES = [
+_MEMORIES = [
     VectorResult(
-        key="global/memories/id1",
+        key="memories/id1",
         score=0.9,
-        metadata={"text": "memory one", "scope": "global", "type": "memory", "created_at": ""},
+        metadata={"text": "memory one", "tags": "scope:global", "type": "memory", "created_at": ""},
     ),
     VectorResult(
-        key="global/memories/id2",
+        key="memories/id2",
         score=0.8,
-        metadata={"text": "memory two", "scope": "global", "type": "memory", "created_at": ""},
+        metadata={"text": "memory two", "tags": "scope:global", "type": "memory", "created_at": ""},
     ),
 ]
 
 
 class TestHandleSummarize:
     def test_handle_summarize_returns_summary_response(self) -> None:
-        s3v = _s3vectors_with_memories(_GLOBAL_MEMORIES)
-        req = SummarizeRequest(scope="global")
+        s3v = _s3vectors_with_memories(_MEMORIES)
+        req = SummarizeRequest()
         result = handle_summarize(req, _CONFIG, _bedrock_client(), s3v)
 
         assert isinstance(result, SummarizeResponse)
         assert result.pruned_count == 2
-        assert result.scope == "global"
         assert result.summary_id != ""
 
     def test_handle_summarize_no_memories_returns_empty(self) -> None:
         s3v = _s3vectors_with_memories([])
-        req = SummarizeRequest(scope="global")
+        req = SummarizeRequest()
         result = handle_summarize(req, _CONFIG, _bedrock_client(), s3v)
 
         assert result.pruned_count == 0
@@ -86,54 +84,67 @@ class TestHandleSummarize:
         assert result.summary_token_count == 0
 
     def test_handle_summarize_skips_existing_summaries(self) -> None:
-        memories_with_summary = _GLOBAL_MEMORIES + [
+        memories_with_summary = _MEMORIES + [
             VectorResult(
-                key="global/memories/summary-xyz",
+                key="memories/summary-xyz",
                 score=0.7,
-                metadata={"text": "old summary", "scope": "global", "type": "summary", "created_at": ""},
+                metadata={"text": "old summary", "tags": "scope:global", "type": "summary", "created_at": ""},
             )
         ]
         s3v = _s3vectors_with_memories(memories_with_summary)
-        req = SummarizeRequest(scope="global")
+        req = SummarizeRequest()
         result = handle_summarize(req, _CONFIG, _bedrock_client(), s3v)
 
-        # Only the 2 "memory" type entries are summarized, not the existing summary
         assert result.pruned_count == 2
 
     def test_handle_summarize_delete_originals_calls_delete_vectors(self) -> None:
-        s3v = _s3vectors_with_memories(_GLOBAL_MEMORIES)
-        req = SummarizeRequest(scope="global", delete_originals=True)
+        s3v = _s3vectors_with_memories(_MEMORIES)
+        req = SummarizeRequest(delete_originals=True)
         handle_summarize(req, _CONFIG, _bedrock_client(), s3v)
 
         s3v.delete_vectors.assert_called_once()
         call_kwargs = s3v.delete_vectors.call_args.kwargs
-        assert set(call_kwargs["keys"]) == {"global/memories/id1", "global/memories/id2"}
+        assert set(call_kwargs["keys"]) == {"memories/id1", "memories/id2"}
 
     def test_handle_summarize_no_delete_without_flag(self) -> None:
-        s3v = _s3vectors_with_memories(_GLOBAL_MEMORIES)
-        req = SummarizeRequest(scope="global", delete_originals=False)
+        s3v = _s3vectors_with_memories(_MEMORIES)
+        req = SummarizeRequest(delete_originals=False)
         handle_summarize(req, _CONFIG, _bedrock_client(), s3v)
 
         s3v.delete_vectors.assert_not_called()
 
     def test_handle_summarize_summary_token_count_matches_word_count(self) -> None:
         summary_text = "one two three"
-        s3v = _s3vectors_with_memories(_GLOBAL_MEMORIES)
-        req = SummarizeRequest(scope="global")
+        s3v = _s3vectors_with_memories(_MEMORIES)
+        req = SummarizeRequest()
         result = handle_summarize(req, _CONFIG, _bedrock_client(summary_text), s3v)
 
         assert result.summary_token_count == 3
 
-    def test_handle_summarize_project_scope_filters_by_prefix(self) -> None:
-        project_memories = [
+    def test_handle_summarize_tag_filter_limits_scope(self) -> None:
+        mixed = [
             VectorResult(
-                key="project/proj-1/memories/id3",
+                key="memories/global-id",
                 score=0.9,
-                metadata={"text": "proj memory", "scope": "project", "type": "memory", "created_at": ""},
-            )
+                metadata={"text": "global memory", "tags": "scope:global", "type": "memory", "created_at": ""},
+            ),
+            VectorResult(
+                key="memories/proj-id",
+                score=0.8,
+                metadata={"text": "project memory", "tags": "scope:project,project:proj-1", "type": "memory", "created_at": ""},
+            ),
         ]
-        s3v = _s3vectors_with_memories(project_memories)
-        req = SummarizeRequest(scope="project", project_id="proj-1")
+        s3v = _s3vectors_with_memories(mixed)
+        req = SummarizeRequest(tag_filter=["scope:project", "project:proj-1"])
         result = handle_summarize(req, _CONFIG, _bedrock_client(), s3v)
 
         assert result.pruned_count == 1
+
+    def test_handle_summarize_summary_stored_at_flat_key(self) -> None:
+        s3v = _s3vectors_with_memories(_MEMORIES)
+        req = SummarizeRequest()
+        handle_summarize(req, _CONFIG, _bedrock_client(), s3v)
+
+        call_kwargs = s3v.put_vectors.call_args.kwargs
+        key = call_kwargs["vectors"][0]["key"]
+        assert key.startswith("memories/summary-")
