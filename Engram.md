@@ -1,6 +1,6 @@
 # Engram Memory
 
-You have persistent memory via three MCP tools: `store_memory`, `recall_memory`, `summarize_memories`.
+You have persistent memory via five MCP tools: `store_memory`, `recall_memory`, `search_related_findings`, `summarize_memories`, `delete_memory`.
 
 ---
 
@@ -47,21 +47,19 @@ Call `search_related_findings` when a recall result scores 0.6–0.8 and you nee
 
 ### Store
 
-Call `store_memory` when a decision with rationale, a preference, a constraint, or significant technical context is established, or when the user explicitly requests it. Skip if already stored this session.
+Before calling `store_memory`, run `/hygiene`. The hygiene skill classifies the content (STATE / DECISION / RULE / DISCOVERY / QUIRK), applies the generalizability test, checks for an existing state entry to update rather than create, and blocks anti-patterns. It outputs a proposed `store_memory` call for confirmation before executing.
 
-**Rationale Capture**: For all major architectural shifts, explicitly store the "Why".
-- Include trade-offs, alternatives, and drivers (Security/Cost).
-- This supports future "Lab" article generation.
+Direct `store_memory` calls are acceptable only when the user explicitly requests it and the content is clearly high-signal.
+
+**Rationale Capture**: For architectural shifts, store the "Why" — trade-offs considered, alternatives rejected, and the driver (Security/Cost/Performance). This supports future "Lab" article generation.
 
 ---
 
 ## Session End
 
-Before your final response, or when the conversation is clearly winding down, store a summary of what was accomplished or decided.
+Do **not** auto-store a session summary. Compaction summaries and end-of-session wrap-ups are compression artifacts — low signal and stale within the same session.
 
-- `text`: concise summary, 500 tokens max
-- `scope`: `"project"` or `"global"` per session context
-- Do not store a summary if nothing meaningful occurred
+Instead, run `/hygiene` for any decision, rule, or discovery that emerged during the session that would be useful in a future conversation. If nothing clears the hygiene filter, store nothing.
 
 ---
 
@@ -78,9 +76,13 @@ Pass `delete_originals: true` only when the user explicitly asks to prune.
 
 ## Do NOT Store
 
+- Session completions, "GROUP COMPLETE," "NEXT SESSION: …," or end-of-session wrap-ups
+- Backlog snapshots: bullet lists of upcoming tasks with no architectural content
+- PR/commit announcements without architectural rationale
+- Command outputs (raw CLI output without interpreted significance)
+- Restatements of documentation already in README, Engram.md, or CLAUDE.md
 - Routine messages or pleasantries
-- Widely known facts or documentation
-- Command outputs
-- Commands (unless the user explicitly requests it)
 - Entire file contents
-- Anything with no value in a future session
+- Anything that would be stale or irrelevant within 2 weeks without a project refresh
+
+When uncertain, run `/hygiene` — it applies the full classification and generalizability gate before deciding whether to call `store_memory`.
