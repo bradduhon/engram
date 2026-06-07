@@ -38,7 +38,8 @@ RECALL_MEMORY_SCHEMA: dict = {
         "project_id": {
             "type": "string",
             "description": (
-                "Project identifier. If provided, searches both project and global memories."
+                "Project identifier. If provided without scope_filter, restricts results to "
+                "project-scoped memories for this project only."
             ),
         },
         "top_k": {

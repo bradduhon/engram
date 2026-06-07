@@ -94,3 +94,43 @@ class TestHandleRecall:
         s3v = _s3vectors_client([])
         result = handle_recall(RecallRequest(query="q"), _CONFIG, _bedrock_client(), s3v)
         assert result.query_ms >= 0
+
+    def test_handle_recall_no_filter_when_no_scope_or_project(self) -> None:
+        s3v = _s3vectors_client([])
+        handle_recall(RecallRequest(query="q"), _CONFIG, _bedrock_client(), s3v)
+        call_kwargs = s3v.query_vectors.call_args.kwargs
+        assert "filter" not in call_kwargs
+
+    def test_handle_recall_global_scope_filter(self) -> None:
+        s3v = _s3vectors_client([])
+        handle_recall(RecallRequest(query="q", scope_filter="global"), _CONFIG, _bedrock_client(), s3v)
+        call_kwargs = s3v.query_vectors.call_args.kwargs
+        assert call_kwargs["filter"] == {"equals": {"key": "scope", "value": "global"}}
+
+    def test_handle_recall_project_scope_filter_with_project_id(self) -> None:
+        s3v = _s3vectors_client([])
+        handle_recall(RecallRequest(query="q", scope_filter="project", project_id="engram"), _CONFIG, _bedrock_client(), s3v)
+        call_kwargs = s3v.query_vectors.call_args.kwargs
+        assert call_kwargs["filter"] == {
+            "and": [
+                {"equals": {"key": "scope", "value": "project"}},
+                {"equals": {"key": "project_id", "value": "engram"}},
+            ]
+        }
+
+    def test_handle_recall_project_id_only_filters_project_scope(self) -> None:
+        s3v = _s3vectors_client([])
+        handle_recall(RecallRequest(query="q", project_id="engram"), _CONFIG, _bedrock_client(), s3v)
+        call_kwargs = s3v.query_vectors.call_args.kwargs
+        assert call_kwargs["filter"] == {
+            "and": [
+                {"equals": {"key": "scope", "value": "project"}},
+                {"equals": {"key": "project_id", "value": "engram"}},
+            ]
+        }
+
+    def test_handle_recall_project_scope_without_project_id(self) -> None:
+        s3v = _s3vectors_client([])
+        handle_recall(RecallRequest(query="q", scope_filter="project"), _CONFIG, _bedrock_client(), s3v)
+        call_kwargs = s3v.query_vectors.call_args.kwargs
+        assert call_kwargs["filter"] == {"equals": {"key": "scope", "value": "project"}}
