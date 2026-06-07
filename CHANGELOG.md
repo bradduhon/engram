@@ -4,20 +4,26 @@ All notable changes to Engram are documented here.
 
 ---
 
-## [Unreleased] — 2026-06-07
+## [0.10.0] — 2026-06-07
 
 ### Added
-- `prompt-context-engram.sh` — `UserPromptSubmit` hook that fires on every message after the first. Classifies the prompt, skips affirmations and short continuations, and injects a `[ENGRAM MID-SESSION CONTEXT]` block via direct mTLS recall when the topic shifts. Complements `session-start-engram.sh` by narrowing recall to the specific content of each new prompt rather than broad project context.
-- `compact-reminder.sh` — `PostCompact` hook that replaces `post-compact-memory.sh`. Injects a re-orientation block after context compaction: security invariants, IAM blast-radius gates, hard stops, and an instruction to call `recall_memory` before continuing.
-- `skills/hygiene/SKILL.md` — `/hygiene` slash command. Gates all `store_memory` calls through a classification step (STATE / DECISION / RULE / DISCOVERY / QUIRK), a generalizability test for rules and discoveries, a single-state-entry enforcement check (recall existing state entry first, propose update-in-place rather than new entry), and an anti-pattern filter. Outputs a proposed `store_memory` block for user confirmation before executing. Symlinked into `~/.claude/skills/hygiene`.
+- `prompt-context-engram.sh` — `UserPromptSubmit` hook that fires on every message after the first. Classifies the prompt, skips affirmations and short continuations, and injects a `[ENGRAM MID-SESSION CONTEXT]` block via direct mTLS recall when the topic shifts.
+- `compact-reminder.sh` — `PostCompact` hook replacing `post-compact-memory.sh`. Injects a re-orientation block after context compaction: security invariants, IAM blast-radius gates, hard stops, and a `recall_memory` instruction.
+- `hooks/store-hygiene-gate.sh` — `PreToolUse` hook on `store_memory`. Deterministically blocks (exit 2) session-completion/task-noise anti-patterns and sub-8-word text. Emits a non-blocking confirmation reminder for all other calls.
+- `skills/hygiene/SKILL.md` — `/hygiene` slash command. Classifies candidates (STATE / DECISION / RULE / DISCOVERY / QUIRK), applies a generalizability test, enforces single-state-entry-per-project, filters anti-patterns, and outputs a proposed `store_memory` call for confirmation. Symlinked into `~/.claude/skills/hygiene`.
+- `rules/memory.md` — Engram store/recall protocol moved into the repo and symlinked to `~/.claude/rules/memory.md`. Mandates `/hygiene` before `store_memory` and defines the three-iteration recall depth protocol.
+- `CHANGELOG.md`, `Features.md` — version history and feature log added to the repo.
 
 ### Removed
-- `post-compact-memory.sh` — PostCompact hook that stored compaction summaries as memories. Removed because compaction summaries are Claude's compression artifacts, not curated knowledge: signal-to-noise is low, content is often stale within the same session, and storage decisions should be deliberate (via `/hygiene`), not automatic.
+- `post-compact-memory.sh` — stored compact summaries automatically. Removed: compaction summaries are Claude's compression artifacts; signal-to-noise is low and storage decisions should be deliberate.
 
 ### Changed
-- `README.md` — Documented `prompt-context-engram.sh` (previously untracked). Replaced `post-compact-memory.sh` documentation with `compact-reminder.sh`. Removed "Automatic Memory via PostCompact" section. Updated hooks configuration example and directory structure.
-- `Engram.md` — Tool count corrected (three → five). `Store` section now gates all calls through `/hygiene`. `Session End` reversed: no longer instructs auto-storage of summaries; delegates to `/hygiene` instead. `Do NOT Store` list expanded to match hygiene skill anti-patterns (session completions, backlog snapshots, PR announcements, 2-week staleness test).
-- `~/.claude/CLAUDE.md` (global) — Fixed typo `recall_memort` → `recall_memory`. `store_memory` directive now gates through `/hygiene`.
+- `README.md` — full restructure. Hook, skill, and rule sections include "What you get" blocks distinguishing deterministic gains from probabilistic gains. Tags section replaces stale scope/project_id model. Symlink setup documented.
+- `Engram.md` — tool count corrected (three → five). Store section gates through `/hygiene`. Session End no longer instructs auto-storage. Do NOT Store list expanded to match hygiene skill anti-patterns.
+- `~/.claude/CLAUDE.md` (global) — fixed typo `recall_memort` → `recall_memory`. `store_memory` directive now gates through `/hygiene`.
+
+### Fixed
+- `scripts/migrate_to_flat_keys.py` — S3 Vectors `GetVectors` does not return raw float values; switched to Bedrock Titan Embed v2 re-embedding from stored metadata `text` field. 72 vectors migrated, smoke test passing.
 
 ---
 
