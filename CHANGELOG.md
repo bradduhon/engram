@@ -19,6 +19,9 @@ All notable changes to Engram are documented here.
 - `Engram.md` — Tool count corrected (three → five). `Store` section now gates all calls through `/hygiene`. `Session End` reversed: no longer instructs auto-storage of summaries; delegates to `/hygiene` instead. `Do NOT Store` list expanded to match hygiene skill anti-patterns (session completions, backlog snapshots, PR announcements, 2-week staleness test).
 - `~/.claude/CLAUDE.md` (global) — Fixed typo `recall_memort` → `recall_memory`. `store_memory` directive now gates through `/hygiene`.
 
+### Fixed
+- `scripts/migrate_to_flat_keys.py` — S3 Vectors `GetVectors` does not return raw float values; switched to Bedrock Titan Embed v2 re-embedding from stored metadata `text` field. Migration verified: 72 vectors re-embedded, written at flat keys, old prefix keys deleted, smoke test passing.
+
 ---
 
 ## [0.9.0] — 2026-05-18
