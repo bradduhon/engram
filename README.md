@@ -1,12 +1,8 @@
 # engram
 
-A personal memory layer for agentic AI that persists context across conversations, sessions, and projects. Secured with mTLS at the transport layer and deployed entirely in your own AWS infrastructure.
+A personal memory layer for agentic AI that persists context across conversations, sessions, and projects. Secured with mTLS and deployed entirely in your own AWS infrastructure.
 
-## Why Engram Exists
-
-Agentic AI tools like Claude Code lose all context when a session ends. Every new conversation starts from zero. Engram solves this by giving Claude persistent, semantically-searchable memory backed by vector embeddings. You store memories explicitly or automatically, and on any future conversation Claude can recall past decisions, preferences, project state, and architectural rationale by semantic similarity rather than keyword matching.
-
-The result: Claude remembers what you decided last week, why you chose a specific architecture, and what trade-offs you considered, across every project on your machine.
+---
 
 ## How It Works
 
@@ -22,102 +18,126 @@ API Gateway HTTP API  (custom domain, mTLS enforced)
     v
 engram-memory-handler Lambda  (Python 3.12, arm64)
     |-- Bedrock Titan Embed v2      (vector embeddings)
-    |-- S3 Vectors                  (semantic search index)
+    |-- S3 Vectors                  (semantic search + flat key storage)
     +-- Secrets Manager             (cert pinning reference)
 ```
 
-1. Claude Code spawns the MCP server as a local child process via stdio.
-2. The MCP server exposes five tools (`store_memory`, `recall_memory`, `search_related_findings`, `summarize_memories`, `delete_memory`) that Claude can call like any other tool.
-3. Each API call is authenticated with mTLS. The client certificate is an ACM exportable cert; the private key is age-encrypted at rest and decrypted only into process memory.
-4. The Lambda handler generates vector embeddings via Bedrock Titan Embed v2 and stores/queries them in S3 Vector Tables.
-5. Lambda additionally pins the exact leaf certificate, rejecting any client cert that wasn't explicitly exported for this deployment, even if signed by the same CA.
+Claude Code spawns the MCP server locally. The MCP server exposes five tools (`store_memory`, `recall_memory`, `search_related_findings`, `summarize_memories`, `delete_memory`) over mTLS. Each memory is stored as a flat key (`memories/{uuid}`) in S3 Vectors with arbitrary tags in metadata (e.g. `scope:project`, `project:engram`, `memory_type:decision`). Recall uses weighted tag boosting to surface the most relevant results.
 
-Lambda communicates with AWS services over their public endpoints. Access is controlled by IAM policies and resource policies, not network isolation.
-
-> **VPC deployment reference:** If you prefer full network isolation (Lambda in a private VPC with Interface Endpoints for Bedrock, S3 Vectors, and Secrets Manager), the last commit with that configuration is [`5e2eaea`](https://github.com/bradduhon/engram/commit/5e2eaea). That architecture costs ~$58/month in VPC endpoint fees.
-
-## The Enforcement Problem
-
-**Claude Code will, by default, not use Engram at session start.** This is not a configuration gap — it is a fundamental property of how large language models process instructions.
-
-CLAUDE.md instructions, however explicit, are treated as preferences. The model weighs them against its training priors at inference time. A directive like "call recall_memory before responding" competes with the model's strong prior to respond immediately. The prior can win — and the model can refuse or simply ignore the directive — because there is no `PreResponse` hook in Claude Code's event model that can mechanically gate text generation behind a tool call.
-
-**Engram solves this by moving the recall out of Claude entirely.** The `UserPromptSubmit` hook calls the Engram recall API directly over mTLS and injects the memory content into the system-reminder. Claude receives the loaded context as data — no tool call required, no compliance required.
-
-| Layer | Mechanism | What it does |
-|-------|-----------|--------------|
-| 1 — Direct recall | `UserPromptSubmit` hook calls `/recall` via mTLS curl | Executes before Claude processes the message. Results injected as system-reminder content |
-| 2 — Quality enforcement | `PostToolUse` hook on `recall_memory` | Fires after any manual recall call, validates relevance scores, forces query expansion below 0.6 |
-
-The hook approach is unconditional: recall happens whether Claude cooperates or not. The only failure modes are infrastructure failures (API down, cert expired, `MEMORY_API_URL` unset), not model behavior.
-
-If you observe the session context missing memories, the cause is almost always one of:
-- `MEMORY_API_URL` is not set in `~/.claude/settings.json` env block
-- The local certs are expired or missing (`~/.claude/certs/`)
-- The `UserPromptSubmit` hook is not wired with the correct `condition` (see configuration below)
+> **VPC reference:** The last commit with full VPC isolation (Lambda + Interface Endpoints) is [`5e2eaea`](https://github.com/bradduhon/engram/commit/5e2eaea). That architecture costs ~$58/month in endpoint fees.
 
 ---
 
-## Hooks and Automation
+## The Enforcement Problem
 
-Engram ships four Claude Code hooks. Each hook is wired in `~/.claude/settings.json` and references scripts in this repository's `hooks/` directory.
+CLAUDE.md instructions are treated as preferences — the model weighs them against its training priors at inference time. A directive like "call recall_memory before responding" competes with the model's prior to respond immediately, and the prior can win.
 
-### UserPromptSubmit Hook — `session-start-engram.sh`
+**Engram solves this with hooks.** The `UserPromptSubmit` hook calls the Engram recall API directly over mTLS and injects results into the system-reminder before Claude processes the message. The `PreToolUse` hook on `store_memory` blocks anti-patterns before they execute. Claude receives context as data, not instructions — compliance is not required.
 
-**Event:** `UserPromptSubmit` with condition `session.messages.length == 0` (fires once on the first user message of a session)
+| Layer | Hook | Enforcement |
+|---|---|---|
+| Session load | `session-start-engram.sh` | Recall fires unconditionally at session open |
+| Mid-session | `prompt-context-engram.sh` | Recall fires on topic shift, every message |
+| Recall quality | `recall-confidence-check.sh` | Forces query expansion on low-confidence results |
+| Storage gate | `store-hygiene-gate.sh` | Blocks anti-patterns before `store_memory` executes |
+| Post-compact | `compact-reminder.sh` | Re-orientation block after context compression |
 
-Calls the Engram recall API directly over mTLS and injects the memory content into the system-reminder as structured text. Claude receives loaded context without calling any MCP tools. If a git project is detected, retrieves project-scoped memories (top_k=8) and global memories (top_k=3) in parallel. If no project is detected, retrieves global memories only (top_k=5).
+---
 
-This is the enforcement mechanism: recall happens unconditionally at the hook layer, before Claude processes the message. CLAUDE.md instructions are advisory; this hook is not.
+## Hooks
 
-### UserPromptSubmit Hook — `prompt-context-engram.sh`
+All hooks live in `hooks/` and are wired in `~/.claude/settings.json` by absolute path.
 
-**Event:** `UserPromptSubmit` (fires on every user message after the first)
+### `session-start-engram.sh` — UserPromptSubmit
 
-Classifies the incoming prompt and skips affirmations, short continuations, and single-word responses. For substantive messages, extracts a keyword query, calls the Engram recall API directly over mTLS, and injects relevant memories as a `[ENGRAM MID-SESSION CONTEXT]` block into the system-reminder. This catches domain shifts mid-session — when the topic changes, the context updates without requiring a tool call from Claude.
+Fires on the first user message of each session. Calls the Engram recall API directly over mTLS, detects the current git project, boosts project-tagged memories via weighted recall, and injects a `[ENGRAM CONTEXT]` block into the system-reminder. No MCP tool call from Claude is required.
 
-Complements `session-start-engram.sh`: the session-start hook pre-loads broad project context at conversation open; this hook narrows recall to the specific content of each new prompt.
+**What you get:** Without this hook, every session starts with zero memory context — Claude must be told what the project is, what decisions were made, and what was decided last time. With it, that context is present before Claude's first token. The recall executes via bash, not via Claude, so it is not subject to model compliance — it either succeeds (API up, certs valid) or fails (infra issue). There is no path where Claude "decides not to recall."
 
-### PostCompact Hook — `compact-reminder.sh`
+### `prompt-context-engram.sh` — UserPromptSubmit
 
-**Event:** `PostCompact` (fires when Claude Code compresses the conversation context, either automatically or via `/compact`)
+Fires on every subsequent message. Classifies the prompt (skips affirmations and short continuations), extracts a keyword query, and injects a `[ENGRAM MID-SESSION CONTEXT]` block when the topic shifts.
 
-Injects a re-orientation block into the system-reminder after context compaction. The block restates security invariants, IAM blast-radius gates, and hard stops that Claude may lose when the context window is compressed. Ends with an instruction to call `recall_memory` with the current project name to re-establish task context.
+**What you get:** Without this hook, session-start context is the only automatic recall — if you shift from Terraform to PKI mid-session, Claude has no mechanism to load PKI memories without an explicit tool call. With it, each substantive message triggers a fresh recall keyed to that message's content. The injection happens before Claude processes the message, so the new context lands before the response, not after. This is also bash-executed and not subject to model compliance.
 
-Compaction summaries are **not** automatically stored as memories. Compact summaries are Claude's compression artifacts, not curated knowledge — their signal-to-noise is low and they are often stale within the same session. Use the `/hygiene` skill to deliberately store any decision, rule, or discovery that came out of the compacted work.
+### `recall-confidence-check.sh` — PostToolUse
 
-### PostToolUse Hook — `recall-confidence-check.sh`
+Fires after any `recall_memory` MCP call. Inspects the relevance scores and emits a nudge when results are empty or the best score is below 0.6.
 
-**Event:** `PostToolUse` (fires after `recall_memory` returns results)
+**What you get:** Without this hook, Claude accepts whatever `recall_memory` returns and proceeds. A 0.4-score result may be used as if it were authoritative. With it, low-confidence results trigger an explicit instruction to expand the query with semantic variants. This is probabilistic — the nudge increases the likelihood Claude retries with a better query, but does not guarantee it. The concrete gain is that weak recall is surfaced rather than silently accepted.
 
-Inspects the recall response and nudges Claude when results are empty or when the best relevance score is below 0.6. The nudge instructs Claude to expand the query with alternate terminology, resource ARNs, or security standard names before declaring zero-knowledge. This enforces the recall protocol defined in `Engram.md` at the hook level rather than relying on CLAUDE.md instructions.
+### `store-hygiene-gate.sh` — PreToolUse
+
+Fires before every `store_memory` call. Blocks (exit 2) on session-completion and task-noise anti-patterns and on text under 8 words. Emits a non-blocking confirmation reminder for all other calls.
+
+**What you get:** The anti-pattern block is deterministic — a memory matching the regex cannot be stored regardless of Claude's intent. The tool call is cancelled at the hook layer before it reaches the API. The confirmation reminder for non-blocked calls is probabilistic: it increases the likelihood Claude verifies `/hygiene` was run, but does not enforce it. Together, the hook eliminates the worst categories of noise mechanically and raises the bar for everything else.
+
+### `compact-reminder.sh` — PostCompact
+
+Fires after Claude Code compresses the conversation context. Injects a re-orientation block with security invariants, IAM blast-radius gates, hard stops, and an instruction to call `recall_memory` before continuing.
+
+**What you get:** After compaction, Claude's working context is replaced with a summary. Without this hook, security invariants and project conventions that were in the prior context are gone until Claude re-encounters them. With it, the invariants are re-injected immediately as the first thing in the new context window. The recall instruction is probabilistic — Claude is more likely to recall project context post-compact, but it is an instruction rather than a forced tool call.
+
+---
+
+## Memory Quality — `/hygiene`
+
+`skills/hygiene/SKILL.md` is a Claude Code slash command (`/hygiene`) that gates every `store_memory` call through:
+
+1. **Classification** — STATE / DECISION / RULE / DISCOVERY / QUIRK
+2. **Generalizability test** — abstracts rules/discoveries to the broadest actionable pattern with the specific incident as a citation
+3. **Single state entry enforcement** — recalls existing project state entry first; proposes update-in-place rather than a new entry
+4. **Anti-pattern filter** — blocks session completions, backlog snapshots, PR announcements, command dumps
+
+Outputs a proposed `store_memory` call with all fields for user confirmation before executing.
+
+**What you get:** Without `/hygiene`, store decisions are ad-hoc — Claude chooses what to store, how to phrase it, and whether to create a new entry or update an existing one, with no consistent gate. With it, every candidate memory is classified, tested for appropriate abstraction level, and confirmed before storage. The single-state-entry check is the concrete gain: it prevents the proliferation of redundant "session complete" and "project state as of" entries that degrade recall quality over time. The generalizability test converts incident-specific lessons into reusable patterns. Both are applied at the point of storage, before the memory exists in the index.
+
+The `store-hygiene-gate.sh` hook is the mechanical fallback — it blocks the most obvious violations even when `/hygiene` is skipped. The rule file (`rules/memory.md`) is the written directive. Together they form three layers: written instruction, probabilistic reminder, deterministic block.
+
+The skill is symlinked into `~/.claude/skills/hygiene` for global availability.
+
+---
+
+## Memory Protocol — `rules/memory.md`
+
+A global rule file (symlinked from `rules/memory.md` to `~/.claude/rules/memory.md`) that is loaded into every Claude Code session. Defines:
+
+- **Store gate:** `/hygiene` is mandatory before `store_memory`. Direct calls are only acceptable on explicit user instruction.
+- **Recall depth:** Initial search at top_k=5, confidence check against relevance scores, recursive expansion with semantic variants if results are weak, explicit zero-knowledge declaration after 3 failed iterations.
+
+**What you get:** Without the rule file, the only written guidance is in CLAUDE.md — which is treated as a preference, not a constraint. The rule file is loaded separately and more prominently, increasing the probability Claude applies the hygiene gate and the recall depth protocol without being reminded each session. This is probabilistic gain: a more specific, always-present directive produces more consistent behavior than a general CLAUDE.md entry.
+
+---
 
 ## MCP Tools
 
-Once the MCP server is running, Claude Code has five tools available:
-
 | Tool | Purpose |
-|------|---------|
-| `store_memory` | Persist a memory with scope (project or global), project_id, and conversation_id |
-| `recall_memory` | Search memories by semantic similarity. Returns relevance scores and timestamps |
-| `search_related_findings` | Retrieve temporal context around a specific memory result (same-session neighbors) |
+|---|---|
+| `store_memory` | Persist a memory with tags, conversation_id, and memory_type |
+| `recall_memory` | Semantic search with optional tag weight boosting |
+| `search_related_findings` | Retrieve temporal context around a specific memory result |
 | `summarize_memories` | Compress many memories into a concise summary. Optionally delete originals |
 | `delete_memory` | Remove a specific memory by ID |
 
-### Scopes
+### Tags
 
-| Scope | When to use | Searchable across |
-|-------|-------------|-------------------|
-| `global` | Cross-project preferences, personal style, general decisions | All conversations |
-| `project` | Project-specific context, decisions, architecture | Conversations in that project |
+Memories use an arbitrary tag set rather than fixed scopes. Common conventions:
 
-When recalling with a `project_id`, the service searches both the project scope and global scope and returns the combined top results.
+| Tag | Meaning |
+|---|---|
+| `scope:global` | Applies across all projects |
+| `scope:project` | Tied to a specific project |
+| `project:<id>` | Project identifier (e.g. `project:engram`) |
+| `memory_type:decision` | Architectural or design choice |
+| `memory_type:rule` | Behavioral constraint or pattern |
+| `memory_type:discovery` | Non-obvious finding about a system or tool |
+
+When recalling, pass `weights` to boost matching tags (e.g. `{"project:engram": 1.5}` surfaces project memories first without hard-filtering global ones).
 
 ---
 
 ## Prerequisites
-
-### Tools
 
 ```bash
 # AWS CLI v2
@@ -129,56 +149,29 @@ terraform -version
 # Python 3.12+
 python3 --version
 
-# age (key encryption for local cert storage)
-# Ubuntu/Debian:
-sudo apt install age
-# or from https://github.com/FiloSottile/age/releases
+# age (private key encryption)
+sudo apt install age   # or https://github.com/FiloSottile/age/releases
 
 # jq and curl (used by hooks)
 sudo apt install jq curl
 ```
 
-### AWS Account
-
-You need:
-- An AWS account with a CLI profile configured (`aws configure`)
+**AWS account requirements:**
+- CLI profile configured (`aws configure` or SSO)
 - Permissions to create: IAM roles, Lambda, ACM certificates, API Gateway, S3, Secrets Manager, Bedrock, CloudWatch, SNS, EventBridge
-- Bedrock model access enabled in your target region for:
-  - `amazon.titan-embed-text-v2:0`
-  - `anthropic.claude-haiku-4-5-20251001-v1:0`
-- A domain name with a DNS zone you control (Route53 or any external provider)
+- Bedrock model access for `amazon.titan-embed-text-v2:0` and `anthropic.claude-haiku-4-5-20251001-v1:0`
+- A domain name with a DNS zone you control
 
-#### Enabling Bedrock Model Access
+**Enabling Bedrock model access:** Open the [Bedrock Model Catalog](https://console.aws.amazon.com/bedrock/home#/model-catalog), find Claude Haiku 4.5, click "Submit use case details", and fill in the form. Titan Embeddings v2 is typically approved immediately without a form.
 
-Anthropic requires first-time customers to submit use case details before invoking any Claude model. This is a one-time step per AWS account (or once at the organization management account). The information is shared with Anthropic.
-
-1. Open the [Amazon Bedrock Model Catalog](https://console.aws.amazon.com/bedrock/home#/model-catalog) in your target region.
-2. Search for **Claude Haiku 4.5** and click **Submit use case details**.
-3. Fill in the form:
-   - **Company Name:** Your full name, or "Self/Individual Developer"
-   - **Company Website:** Your personal portfolio, GitHub profile (`https://github.com/<you>`), or `https://aws.amazon.com`
-   - **Industry:** Technology, or Personal Project/Education
-   - **Intended users:** Internal users (employees, staff, team members)
-   - **Use Case Description:**
-     ```
-     This implementation leverages Claude models via Amazon Bedrock as the
-     intelligence layer within a serverless memory microservice designed to
-     provide persistent, semantically-searchable context across agentic AI
-     interactions. The architecture addresses a fundamental limitation in
-     current agentic workflows, the absence of durable, queryable memory
-     that survives across sessions, interfaces, and deployments.
-     ```
-4. Submit. Access is typically granted within minutes.
-5. Repeat for **Titan Embeddings v2** (`amazon.titan-embed-text-v2:0`) if not already enabled. Titan models are generally approved immediately without a use case form.
-
-### Python (MCP server)
-
-The MCP server must be installed as a package so it is importable from any working directory. Claude Code spawns the server globally, and relying on `cwd` alone is not reliable across projects.
+**Install the MCP server package:**
 
 ```bash
 cd <path-to-engram-repo>
 pip install -e ".[mcp-server]"
 ```
+
+Use the full path to this virtualenv's Python interpreter when configuring `~/.claude.json`. Claude Code spawns the server globally — a bare `python` may resolve to the wrong environment.
 
 ---
 
@@ -186,7 +179,7 @@ pip install -e ".[mcp-server]"
 
 ### Step 1: Bootstrap Terraform state backend
 
-Creates the S3 bucket and DynamoDB table used as the remote state backend. Run once.
+Run once. Creates the S3 bucket and DynamoDB table for remote state.
 
 ```bash
 cd terraform/bootstrap
@@ -196,8 +189,7 @@ aws_region  = "us-east-1"
 aws_profile = "default"
 EOF
 
-terraform init
-terraform apply
+terraform init && terraform apply
 ```
 
 Note the outputs: `state_bucket_name` and `lock_table_name`.
@@ -205,21 +197,19 @@ Note the outputs: `state_bucket_name` and `lock_table_name`.
 ### Step 2: Configure the remote backend
 
 ```bash
-cd ..   # back to terraform/
+cd ..   # terraform/
 cp backend.hcl.example backend.hcl
 ```
 
 Edit `backend.hcl`:
 
 ```hcl
-bucket         = "<state_bucket_name from Step 1>"
+bucket         = "<state_bucket_name>"
 key            = "engram/terraform.tfstate"
 region         = "us-east-1"
-dynamodb_table = "<lock_table_name from Step 1>"
+dynamodb_table = "<lock_table_name>"
 profile        = "default"
 ```
-
-Initialize with the remote backend:
 
 ```bash
 terraform init -backend-config=backend.hcl
@@ -233,11 +223,9 @@ aws_region         = "us-east-1"
 aws_profile        = "default"
 server_domain_name = "memory.<your-domain>"
 client_domain_name = "mcp-client.<your-domain>"
-alert_email        = "<your-email-address>"
+alert_email        = "<your-email>"
 EOF
 ```
-
-> **Note on DNS:** The DNS A/CNAME record for `server_domain_name` is not created automatically. After `terraform apply` completes, run `terraform output custom_domain_target` to get the API Gateway regional domain name, then create the record in your DNS provider. See Step 4 below.
 
 ### Step 4: Deploy infrastructure
 
@@ -245,102 +233,53 @@ EOF
 terraform apply
 ```
 
-**Terraform will pause** at `aws_acm_certificate_validation` after creating the two ACM certificates. This is expected. While it waits, open a second terminal:
+Terraform will pause at `aws_acm_certificate_validation`. While it waits, retrieve the DNS validation records and add them to your zone:
 
 ```bash
-cd terraform/
-
-# Get the CNAME records to add to your DNS zone
 terraform output -json server_cert_validation_records
 terraform output -json client_cert_validation_records
 ```
 
-Add all CNAME records to your DNS zone (Route53, Cloudflare, etc.). ACM will issue the certificates within 1-5 minutes of DNS propagation, and Terraform will resume automatically.
-
-After `terraform apply` completes, all infrastructure is live:
-- API Gateway with mTLS at `https://memory.<your-domain>`
-- Lambda memory handler
-- S3 Vectors index for semantic search
-- CloudWatch alarms and SNS alerts
-- EventBridge daily summarizer (2:00 AM UTC)
-
-**Manual DNS step (required):** Create an A or CNAME record in your DNS provider pointing `server_domain_name` to the API Gateway regional domain:
+After ACM issues the certs (1-5 minutes), Terraform resumes. When complete, manually create the DNS A/CNAME record:
 
 ```bash
 terraform output custom_domain_target
-# e.g. d-xxxxxxxxxx.execute-api.us-east-1.amazonaws.com
+# Point memory.<your-domain> at this value
 ```
 
-Point `memory.<your-domain>` at that value. One-time step.
+### Step 5: Export the client certificate
 
-### Step 5: Export the client certificate and build the truststore
-
-This step:
-- Exports the cert bundle (cert + chain + encrypted key) into Secrets Manager for the MCP server and Lambda cert pinning
-- Builds the mTLS truststore (Amazon RSA 2048 M04 intermediate + self-signed Amazon Root CA 1) and uploads it to S3
-- Outputs the S3 object version ID needed to tell API Gateway to reload the truststore
+Exports the cert bundle to Secrets Manager and builds the mTLS truststore in S3.
 
 ```bash
-cd ..   # engram project root
-
+cd ..   # engram root
 CLIENT_CERT_ARN=$(terraform -chdir=terraform output -raw client_cert_arn)
-
-python scripts/export_client_cert.py "$CLIENT_CERT_ARN" --profile <aws-profile> [--region us-east-1]
+python scripts/export_client_cert.py "$CLIENT_CERT_ARN" --profile <aws-profile>
 ```
 
-The script will print:
-
-```
-Next steps:
-  1. Set in terraform.tfvars:  truststore_version = "abc123..."
-  2. Run:                       terraform apply -var-file=terraform.tfvars
-  3. Run:                       ./scripts/setup-certs.sh <profile> [region]
-```
-
-Add the `truststore_version` value to `terraform/terraform.tfvars` and apply:
+Add the printed `truststore_version` to `terraform/terraform.tfvars`, then apply:
 
 ```bash
-cd terraform
-terraform apply -var-file=terraform.tfvars
+cd terraform && terraform apply
 ```
-
-This `truststore_version` tells API Gateway the exact S3 object version to read as the truststore. On cert renewal, repeat this step and update the version in `terraform.tfvars`.
 
 ### Step 6: Set up local certificate storage
-
-Run once to create age-encrypted local certs used by the MCP server and PostCompact hook:
 
 ```bash
 ./scripts/setup-certs.sh <aws-profile> [aws-region]
 ```
 
-`aws-region` defaults to `us-east-1` if omitted. Requires `secretsmanager:GetSecretValue` on `engram/mcp-client-cert*` secrets.
-
-Creates:
-
-```
-~/.claude/certs/
-  age-identity.txt              # age decryption key (chmod 600, never rotated)
-  client.crt                    # mTLS client certificate (chmod 600)
-  client.key.age                # mTLS private key, age-encrypted (chmod 600)
-  amazon-trust-services-ca.pem  # Amazon root CA bundle (chmod 600)
-```
-
-The plaintext private key is never written to disk. It is decrypted from Secrets Manager and piped directly into `age` for encryption.
+Creates `~/.claude/certs/` with the age-encrypted private key, client cert, and CA bundle. The plaintext key is never written to disk.
 
 ### Step 7: Confirm SNS alert subscription
 
-Check the inbox for your `alert_email` and confirm the SNS subscription. This enables CloudWatch alarm notifications for Lambda errors, throttles, and high latency.
+Check your `alert_email` inbox and confirm the SNS subscription for CloudWatch alarm notifications.
 
 ---
 
 ## Post-Deployment Configuration
 
-These steps configure Claude Code to use Engram across all projects.
-
-### Configure the MCP server
-
-Add the `mcpServers` key to `~/.claude.json` (Claude Code's primary config file):
+### MCP server (`~/.claude.json`)
 
 ```json
 {
@@ -356,29 +295,17 @@ Add the `mcpServers` key to `~/.claude.json` (Claude Code's primary config file)
 }
 ```
 
-Use the full path to the Python interpreter from the virtualenv where you ran `pip install -e ".[mcp-server]"`. Do not use a bare `python` command; Claude Code may resolve it against a different environment.
-
-`~/.claude.json` likely already exists. Add the `mcpServers` key without replacing the file contents.
-
-> **Note:** The `cwd` field is not required when the package is installed via `pip install -e`. Omit it. If included and the working directory is wrong, the server fails silently in projects other than the engram repo.
-
-### Configure CLAUDE.md
-
-Add the following to your global `~/.claude/CLAUDE.md`:
+### CLAUDE.md (`~/.claude/CLAUDE.md`)
 
 ```markdown
 # Memory
 
-You have access to an Engram memory MCP server with tools: `store_memory`, `recall_memory`, `search_related_findings`, `summarize_memories`, `delete_memory`. These tools persist context across all conversations, sessions, and projects. Behavior is defined in [Engram.md](<absolute-path-to-engram-repo>/Engram.md).
+You have access to an Engram memory MCP server with tools: `store_memory`, `recall_memory`,
+`search_related_findings`, `summarize_memories`, `delete_memory`. Behavior is defined in
+[Engram.md](<absolute-path-to-engram-repo>/Engram.md).
 ```
 
-Replace `<absolute-path-to-engram-repo>` with the actual path (e.g. `/home/user/engram`).
-
-`Engram.md` ships with this project and defines when Claude stores, recalls, and summarizes without user prompting.
-
-### Configure global permissions
-
-Add all Engram MCP tools to the `permissions.allow` array in `~/.claude/settings.json` so Claude can call them without prompting in every project:
+### Permissions (`~/.claude/settings.json`)
 
 ```json
 {
@@ -394,13 +321,7 @@ Add all Engram MCP tools to the `permissions.allow` array in `~/.claude/settings
 }
 ```
 
-Without this, Claude will ask for permission on every MCP call or silently skip them.
-
-### Configure hooks
-
-Add the following hook entries to `~/.claude/settings.json`. All hook scripts live in this repository's `hooks/` directory; reference them by absolute path.
-
-Replace `<absolute-path-to-engram-repo>` with the actual path (e.g. `/home/user/engram`).
+### Hooks (`~/.claude/settings.json`)
 
 ```json
 {
@@ -411,159 +332,110 @@ Replace `<absolute-path-to-engram-repo>` with the actual path (e.g. `/home/user/
     "UserPromptSubmit": [
       {
         "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash <absolute-path-to-engram-repo>/hooks/session-start-engram.sh",
-            "timeout": 15
-          }
-        ]
+        "hooks": [{
+          "type": "command",
+          "command": "bash <repo>/hooks/session-start-engram.sh",
+          "timeout": 15
+        }]
       },
       {
         "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash <absolute-path-to-engram-repo>/hooks/prompt-context-engram.sh",
-            "timeout": 10
-          }
-        ]
+        "hooks": [{
+          "type": "command",
+          "command": "bash <repo>/hooks/prompt-context-engram.sh",
+          "timeout": 10
+        }]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__engram-memory__store_memory",
+        "hooks": [{
+          "type": "command",
+          "command": "bash <repo>/hooks/store-hygiene-gate.sh",
+          "timeout": 5
+        }]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "mcp__engram-memory__recall_memory",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash <absolute-path-to-engram-repo>/hooks/recall-confidence-check.sh",
-            "timeout": 10
-          }
-        ]
+        "hooks": [{
+          "type": "command",
+          "command": "bash <repo>/hooks/recall-confidence-check.sh",
+          "timeout": 10
+        }]
       }
     ],
     "PostCompact": [
       {
         "matcher": "auto|manual",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash <absolute-path-to-engram-repo>/hooks/compact-reminder.sh",
-            "timeout": 15
-          }
-        ]
+        "hooks": [{
+          "type": "command",
+          "command": "bash <repo>/hooks/compact-reminder.sh",
+          "timeout": 15
+        }]
       }
     ]
   }
 }
 ```
 
-> **Note:** `MEMORY_API_URL` is required by `session-start-engram.sh` and `prompt-context-engram.sh` — both call the API directly over mTLS. The recall-confidence-check and compact-reminder hooks do not use it.
+`MEMORY_API_URL` is required by `session-start-engram.sh` and `prompt-context-engram.sh`. The other hooks do not use it. If you have existing hook entries, merge these into your arrays rather than replacing them.
 
-> **Note:** If you already have other hooks configured (e.g. `PreToolUse`, other `PostToolUse` matchers), merge the Engram entries into your existing arrays rather than replacing them.
-
-### Verify the installation
-
-Restart Claude Code. On the first message of a session the `UserPromptSubmit` hook fires, calls the recall API, and injects a `[ENGRAM CONTEXT — N project memories, M global memories]` block into the system-reminder before Claude responds. No MCP tool call from Claude is required or expected. Verify:
-
-1. The session-start hook fires and the context header appears in the system-reminder
-2. The MCP tools are available (ask Claude: "What memory tools do you have?")
-3. Store and recall work end-to-end:
+### Symlinks
 
 ```bash
-# Store a test memory via mTLS (from terminal)
-curl --silent \
-  --cert ~/.claude/certs/client.crt \
-  --key <(age -d -i ~/.claude/certs/age-identity.txt ~/.claude/certs/client.key.age) \
-  --cacert ~/.claude/certs/amazon-trust-services-ca.pem \
-  -X POST "https://memory.<your-domain>/store" \
-  -H "Content-Type: application/json" \
-  -d '{"text":"engram setup verification","scope":"global","conversation_id":"setup-verify"}'
-
-# Recall it
-curl --silent \
-  --cert ~/.claude/certs/client.crt \
-  --key <(age -d -i ~/.claude/certs/age-identity.txt ~/.claude/certs/client.key.age) \
-  --cacert ~/.claude/certs/amazon-trust-services-ca.pem \
-  -X POST "https://memory.<your-domain>/recall" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"setup verification"}' | jq '.memories[0].text'
-
-# Confirm unauthenticated requests are rejected (expects TLS handshake failure)
-curl -s -o /dev/null -w "%{http_code}" \
-  -X POST "https://memory.<your-domain>/store" \
-  -H "Content-Type: application/json" \
-  -d '{"text":"should fail","scope":"global","conversation_id":"test"}'
-# Expected: 000 (no HTTP connection established — mTLS rejected the request)
+ln -s <repo>/skills/hygiene ~/.claude/skills/hygiene
+ln -s <repo>/rules/memory.md ~/.claude/rules/memory.md
 ```
 
-Or use the smoke test script for end-to-end verification:
+### Verify
 
 ```bash
 MEMORY_API_URL=https://memory.<your-domain> python3 scripts/smoke_test.py
 ```
 
+On the first session message, the `[ENGRAM CONTEXT]` block appears in the system-reminder. No tool call from Claude required.
+
 ---
 
 ## Cert Rotation
 
-ACM auto-renews the client certificate before expiry. When it does:
+ACM auto-renews. When the cert rotates:
 
-1. EventBridge triggers the cert rotator Lambda, which re-exports the bundle to Secrets Manager automatically. Lambda cert pinning picks up the new cert on its next cold start.
-2. Re-run `export_client_cert.py` to rebuild the truststore:
-
-```bash
-CLIENT_CERT_ARN=$(terraform -chdir=terraform output -raw client_cert_arn)
-python scripts/export_client_cert.py "$CLIENT_CERT_ARN" --profile <aws-profile>
-```
-
-3. Update `truststore_version` in `terraform/terraform.tfvars` with the printed version ID and apply:
-
-```bash
-cd terraform && terraform apply -var-file=terraform.tfvars
-```
-
+1. EventBridge triggers the cert rotator Lambda — it re-exports the bundle to Secrets Manager automatically.
+2. Rebuild the truststore:
+   ```bash
+   CLIENT_CERT_ARN=$(terraform -chdir=terraform output -raw client_cert_arn)
+   python scripts/export_client_cert.py "$CLIENT_CERT_ARN" --profile <aws-profile>
+   ```
+3. Update `truststore_version` in `terraform.tfvars` and apply:
+   ```bash
+   cd terraform && terraform apply
+   ```
 4. Refresh local certs:
+   ```bash
+   ./scripts/setup-certs.sh <aws-profile> [aws-region]
+   ```
 
-```bash
-./scripts/setup-certs.sh <aws-profile> [aws-region]
-```
-
-The `age-identity.txt` file is never rotated. Only `client.crt` and `client.key.age` are overwritten.
+`age-identity.txt` is never rotated. Only `client.crt` and `client.key.age` are overwritten.
 
 ---
 
 ## Security
 
 | Layer | Control |
-|-------|---------|
-| Transport (layer 1) | mTLS via API Gateway. Client cert chain validated against truststore containing Amazon RSA 2048 M04 intermediate CA and self-signed Amazon Root CA 1 |
-| Transport (layer 2) | Lambda cert pinning. Handler fetches exact leaf cert PEM from Secrets Manager and compares byte-for-byte against `requestContext.authentication.clientCert.clientCertPem` |
-| Network | Lambda outside VPC. AWS service access via public endpoints. IAM least-privilege on all service calls |
-| S3 access | Bucket policy denies requests from external AWS accounts. TLS enforced via `aws:SecureTransport` deny |
-| Data at rest | SSE-KMS (aws/s3 managed key). Secrets Manager default encryption |
-| Private key (server) | Held in Secrets Manager, fetched to MCP server process memory, written to a `0o600` temp file for the httpx connection lifetime only |
-| Private key (hook) | age-encrypted on disk. Decrypted via process substitution; plaintext exists only in a kernel pipe buffer, never as a named file |
-| IAM | Scoped to exact actions and resource ARNs. Explicit deny on Bedrock admin APIs |
-| Blast radius | Lambda reserved concurrency = 10. API Gateway throttle = 100 burst / 50 steady |
-
----
-
-## Known Operational Gotchas
-
-### Removing Lambda from a VPC requires a two-step apply
-
-If you re-add VPC config to Lambda and later want to remove it, Terraform will attempt to modify the Lambda and destroy the networking resources in parallel. Lambda hyperplane ENIs are held `in-use` by AWS for up to 45+ minutes after removal, which causes subnet and security group destroys to time out.
-
-Prevent this by staging the apply:
-
-```bash
-# Step 1: detach Lambda from VPC first, wait for ENIs to release
-terraform apply -target=module.compute
-
-# Step 2: destroy networking resources once Lambda is fully detached
-terraform apply
-```
+|---|---|
+| Transport (layer 1) | mTLS via API Gateway. Truststore: Amazon RSA 2048 M04 intermediate + Amazon Root CA 1 |
+| Transport (layer 2) | Lambda cert pinning — compares leaf cert byte-for-byte against Secrets Manager reference |
+| Network | Lambda outside VPC. Access via AWS public endpoints, controlled by IAM and resource policies |
+| S3 | Bucket policy denies external account requests. TLS enforced via `aws:SecureTransport` deny |
+| Data at rest | SSE-KMS (`aws/s3`). Secrets Manager default encryption |
+| Private key (MCP server) | Fetched to process memory; written to a `0o600` temp file for the connection lifetime only |
+| Private key (hooks) | age-encrypted on disk; decrypted via process substitution — plaintext in kernel pipe buffer only |
+| IAM | Scoped to exact actions and ARNs. Explicit deny on Bedrock admin APIs |
+| Blast radius | Lambda concurrency = 10. API Gateway: 100 burst / 50 steady |
 
 ---
 
@@ -579,22 +451,31 @@ engram/
       compute/        # Lambda functions, IAM roles
       api/            # API Gateway, custom domain, mTLS, routes
       observability/  # CloudWatch alarms, SNS, EventBridge scheduler
-    main.tf           # Root module, wires all modules
+    main.tf           # Root module
   src/
-    memory_handler/   # Lambda: store/recall/summarize via Bedrock + S3 Vectors
+    memory_handler/   # Lambda: store/recall/summarize/prune via Bedrock + S3 Vectors
     cert_rotator/     # Lambda: ACM cert re-export to Secrets Manager on renewal
-  mcp_server/         # Local MCP server (runs as Claude Code child process)
+  mcp_server/         # Local MCP server (Claude Code child process, stdio transport)
   hooks/
-    session-start-engram.sh     # UserPromptSubmit hook (first message): loads project + global context
-    prompt-context-engram.sh    # UserPromptSubmit hook (every message): mid-session recall on topic shift
-    recall-confidence-check.sh  # PostToolUse hook: validates recall quality, forces query expansion
-    compact-reminder.sh         # PostCompact hook: re-orientation block + security invariant checklist
+    session-start-engram.sh     # UserPromptSubmit: session-open recall + context injection
+    prompt-context-engram.sh    # UserPromptSubmit: mid-session recall on topic shift
+    store-hygiene-gate.sh       # PreToolUse: blocks anti-patterns before store_memory
+    recall-confidence-check.sh  # PostToolUse: forces query expansion on low-confidence results
+    compact-reminder.sh         # PostCompact: re-orientation block + security invariants
+  rules/
+    memory.md                   # Store/recall protocol — symlinked: ~/.claude/rules/memory.md
   skills/
     hygiene/
-      SKILL.md                  # /hygiene slash command: classify, generalize, and gate store_memory calls
+      SKILL.md                  # /hygiene slash command — symlinked: ~/.claude/skills/hygiene
   scripts/
-    export_client_cert.py       # Export ACM client cert into Secrets Manager
+    export_client_cert.py       # Export ACM client cert into Secrets Manager + build truststore
     setup-certs.sh              # One-time local cert setup (age-encrypted key)
-    smoke_test.py               # End-to-end mTLS verification
-  Engram.md                     # Behavioral contract for Claude memory usage
+    smoke_test.py               # End-to-end mTLS store/recall/search_related verification
+    migrate_to_flat_keys.py     # One-time migration: prefix keys -> flat keys with tag injection
+    backup_vectors.py           # Backup all vectors to JSON before migrations
+    restore_from_backup.py      # Restore vectors from backup JSON
+    bulk_delete.py              # Content-addressed bulk delete by index from backup
+  Engram.md                     # Claude behavioral contract: when/how to store, recall, gate
+  CHANGELOG.md                  # Version history
+  Features.md                   # Feature backlog and completed work log
 ```
