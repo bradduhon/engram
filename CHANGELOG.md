@@ -4,7 +4,7 @@ All notable changes to Engram are documented here.
 
 ---
 
-## [Unreleased] — 2026-06-07
+## [0.10.0] — 2026-06-07
 
 ### Added
 - `prompt-context-engram.sh` — `UserPromptSubmit` hook that fires on every message after the first. Classifies the prompt, skips affirmations and short continuations, and injects a `[ENGRAM MID-SESSION CONTEXT]` block via direct mTLS recall when the topic shifts. Complements `session-start-engram.sh` by narrowing recall to the specific content of each new prompt rather than broad project context.
@@ -21,6 +21,17 @@ All notable changes to Engram are documented here.
 
 ### Fixed
 - `scripts/migrate_to_flat_keys.py` — S3 Vectors `GetVectors` does not return raw float values; switched to Bedrock Titan Embed v2 re-embedding from stored metadata `text` field. Migration verified: 72 vectors re-embedded, written at flat keys, old prefix keys deleted, smoke test passing.
+
+---
+
+### Added (continued — hygiene enforcement layer)
+- `hooks/store-hygiene-gate.sh` — `PreToolUse` hook on `mcp__engram-memory__store_memory`. Deterministically blocks (exit 2) text matching session-completion or task-noise anti-patterns and text under 8 words. Emits a non-blocking confirmation reminder for all other calls. Wired in `~/.claude/settings.json`.
+- `rules/memory.md` — Engram store/recall protocol moved from `~/.claude/rules/` into the repo and symlinked back. Mandates `/hygiene` before every `store_memory` call and defines the three-iteration recall depth protocol. Loaded globally in every Claude Code session.
+- `README.md` — Full restructure: hook, skill, and rule sections each include a "What you get" block distinguishing deterministic gains (bash-executed, model compliance irrelevant) from probabilistic gains (increases likelihood, not guaranteed). Tags section replaces stale scope/project_id model documentation.
+
+### Changed (continued)
+- `skills/hygiene/SKILL.md` — symlinked into `~/.claude/skills/hygiene` (was documented but not yet symlinked in previous entry).
+- `rules/memory.md` — symlinked from `~/.claude/rules/memory.md` to `MyProjects/engram/rules/memory.md` for version control.
 
 ---
 
