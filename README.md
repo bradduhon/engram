@@ -40,24 +40,21 @@ Lambda communicates with AWS services over their public endpoints. Access is con
 
 **Claude Code will, by default, not use Engram at session start.** This is not a configuration gap — it is a fundamental property of how large language models process instructions.
 
-CLAUDE.md instructions, however explicit, are treated as preferences. The model weighs them against its training priors at inference time. A directive like "call recall_memory before responding" competes with the model's strong prior to respond immediately. The prior wins — consistently — unless every available enforcement surface is saturated simultaneously.
+CLAUDE.md instructions, however explicit, are treated as preferences. The model weighs them against its training priors at inference time. A directive like "call recall_memory before responding" competes with the model's strong prior to respond immediately. The prior can win — and the model can refuse or simply ignore the directive — because there is no `PreResponse` hook in Claude Code's event model that can mechanically gate text generation behind a tool call.
 
-There is no `PreResponse` hook in Claude Code's event model. No mechanism exists to block the model from generating text before a tool call completes. The hook architecture fires on tool events only, not on text generation events. This means you cannot mechanically gate a response behind a tool call. You can only increase the probability of compliance through redundant, overlapping instructions.
-
-Engram addresses this with three layers working in parallel:
+**Engram solves this by moving the recall out of Claude entirely.** The `UserPromptSubmit` hook calls the Engram recall API directly over mTLS and injects the memory content into the system-reminder. Claude receives the loaded context as data — no tool call required, no compliance required.
 
 | Layer | Mechanism | What it does |
 |-------|-----------|--------------|
-| 1 — Load-order gate | `[HARD REQUIREMENT]` block at line 1 of `~/.claude/CLAUDE.md` | First instruction the model reads. Refusal-framed: "DO NOT generate any response until..." |
-| 2 — Context injection | `SessionStart` hook injects a mandatory recall directive into conversation context | Repeats the requirement at runtime, immediately before the first user message |
-| 3 — Quality enforcement | `PostToolUse` hook on `recall_memory` | Fires after every recall call, validates relevance scores, forces query expansion below 0.6 |
+| 1 — Direct recall | `UserPromptSubmit` hook calls `/recall` via mTLS curl | Executes before Claude processes the message. Results injected as system-reminder content |
+| 2 — Quality enforcement | `PostToolUse` hook on `recall_memory` | Fires after any manual recall call, validates relevance scores, forces query expansion below 0.6 |
 
-Even with all three layers active, compliance is probabilistic. The model can still violate the gate. What the layered approach does is make violation the path of higher resistance — it requires the model to ignore instructions in CLAUDE.md, the injected context directive, and the structural framing of the HARD REQUIREMENT block simultaneously.
+The hook approach is unconditional: recall happens whether Claude cooperates or not. The only failure modes are infrastructure failures (API down, cert expired, `MEMORY_API_URL` unset), not model behavior.
 
-If you observe the session gate being skipped, the cause is almost always one of:
-- The `[HARD REQUIREMENT]` block is not at the top of the global CLAUDE.md (it must precede all other content)
-- The SessionStart hook failed silently (check `MEMORY_API_URL` is set in `~/.claude/settings.json` env block)
-- The MCP server is down or the tool is not auto-allowed in permissions
+If you observe the session context missing memories, the cause is almost always one of:
+- `MEMORY_API_URL` is not set in `~/.claude/settings.json` env block
+- The local certs are expired or missing (`~/.claude/certs/`)
+- The `UserPromptSubmit` hook is not wired with the correct `condition` (see configuration below)
 
 ---
 
@@ -65,13 +62,13 @@ If you observe the session gate being skipped, the cause is almost always one of
 
 Engram ships three Claude Code hooks that automate memory operations without user intervention. Each hook is wired in `~/.claude/settings.json` and references scripts in this repository's `hooks/` directory.
 
-### SessionStart Hook — `session-start-engram.sh`
+### UserPromptSubmit Hook — `session-start-engram.sh`
 
-**Event:** `SessionStart` (fires once when Claude Code launches a new session)
+**Event:** `UserPromptSubmit` with condition `session.messages.length == 0` (fires once on the first user message of a session)
 
-Injects a mandatory directive into the conversation context that instructs Claude to call `recall_memory` via MCP before responding to the first message. If a git project is detected, it requests project-scoped memories (top_k=8) first, then global memories (top_k=3). If no project is detected, it requests global memories only (top_k=5).
+Calls the Engram recall API directly over mTLS and injects the memory content into the system-reminder as structured text. Claude receives loaded context without calling any MCP tools. If a git project is detected, retrieves project-scoped memories (top_k=8) and global memories (top_k=3) in parallel. If no project is detected, retrieves global memories only (top_k=5).
 
-This is the mechanism that makes Claude actually use Engram at session start. Without it, CLAUDE.md instructions alone are unreliably followed.
+This is the enforcement mechanism: recall happens unconditionally at the hook layer, before Claude processes the message. CLAUDE.md instructions are advisory; this hook is not.
 
 ### PostCompact Hook — `post-compact-memory.sh`
 
@@ -407,9 +404,10 @@ Replace `<absolute-path-to-engram-repo>` with the actual path (e.g. `/home/user/
     "MEMORY_API_URL": "https://memory.<your-domain>"
   },
   "hooks": {
-    "SessionStart": [
+    "UserPromptSubmit": [
       {
         "matcher": "",
+        "condition": "session.messages.length == 0",
         "hooks": [
           {
             "type": "command",
@@ -447,15 +445,15 @@ Replace `<absolute-path-to-engram-repo>` with the actual path (e.g. `/home/user/
 }
 ```
 
-> **Note:** The `MEMORY_API_URL` env var is required by `post-compact-memory.sh` (it calls the API directly over mTLS). The SessionStart and recall-confidence-check hooks do not use it; they operate on Claude's context and MCP tool output respectively.
+> **Note:** `MEMORY_API_URL` is required by both `session-start-engram.sh` and `post-compact-memory.sh` — both call the API directly over mTLS. The recall-confidence-check hook operates on MCP tool output only and does not use it.
 
 > **Note:** If you already have other hooks configured (e.g. `PreToolUse`, other `PostToolUse` matchers), merge the Engram entries into your existing arrays rather than replacing them.
 
 ### Verify the installation
 
-Restart Claude Code. On the first session you should see Claude execute `recall_memory` calls before responding to your message. Verify:
+Restart Claude Code. On the first message of a session the `UserPromptSubmit` hook fires, calls the recall API, and injects a `[ENGRAM CONTEXT — N project memories, M global memories]` block into the system-reminder before Claude responds. No MCP tool call from Claude is required or expected. Verify:
 
-1. The SessionStart hook fires (Claude reports a `[Context: ...]` status line)
+1. The session-start hook fires and the context header appears in the system-reminder
 2. The MCP tools are available (ask Claude: "What memory tools do you have?")
 3. Store and recall work end-to-end:
 
@@ -574,7 +572,7 @@ engram/
     cert_rotator/     # Lambda: ACM cert re-export to Secrets Manager on renewal
   mcp_server/         # Local MCP server (runs as Claude Code child process)
   hooks/
-    session-start-engram.sh     # SessionStart hook: injects recall directive
+    session-start-engram.sh     # UserPromptSubmit hook: calls recall API, injects context
     post-compact-memory.sh      # PostCompact hook: stores compaction summaries
     recall-confidence-check.sh  # PostToolUse hook: validates recall quality
   scripts/
