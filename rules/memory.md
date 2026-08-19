@@ -21,6 +21,6 @@ You must not accept shallow results. When searching for context:
 1. **Initial Search**: Call `recall_memory(query, top_k=5)`.
 2. **Confidence Check**: Do these results contain the RATIONALE or the DECISION for this specific technical path?
 3. **Recursive Expansion**: If ambiguous or insufficient:
-    - Generate 3 semantic variants (e.g. if 'PKI' failed, try 'FIPS-compliant key rotation' or '[redacted] secret management').
+    - Generate 3 semantic variants (e.g. if 'PKI' failed, try 'FIPS-compliant key rotation' or 'payment-service secret management').
     - Re-run with higher `top_k` or call `search_related_findings` on the best result.
 4. **Failure State**: After 3 iterations with no context: "NO HISTORICAL CONTEXT FOUND. Proceeding with Zero-Knowledge Implementation based on CIS Benchmarks."
