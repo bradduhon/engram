@@ -68,7 +68,7 @@ All notable changes to Engram are documented here.
 - VPC layer: networking module deleted, four Interface Endpoints eliminated (~$58/month savings). Lambda communicates with Bedrock, S3 Vectors, and Secrets Manager over public endpoints, controlled by IAM and resource policies.
 
 ### Added
-- VPC reference commit (`5e2eaea`) preserved in README for users who prefer full network isolation.
+- VPC reference preserved in README for users who prefer full network isolation, pointing at the removal PR rather than a pinned commit.
 
 ---
 

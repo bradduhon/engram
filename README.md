@@ -24,7 +24,7 @@ engram-memory-handler Lambda  (Python 3.12, arm64)
 
 Claude Code spawns the MCP server locally. The MCP server exposes five tools (`store_memory`, `recall_memory`, `search_related_findings`, `summarize_memories`, `delete_memory`) over mTLS. Each memory is stored as a flat key (`memories/{uuid}`) in S3 Vectors with arbitrary tags in metadata (e.g. `scope:project`, `project:engram`, `memory_type:decision`). Recall uses weighted tag boosting to surface the most relevant results.
 
-> **VPC reference:** The last commit with full VPC isolation (Lambda + Interface Endpoints) is [`5e2eaea`](https://github.com/bradduhon/engram/commit/5e2eaea). That architecture costs ~$58/month in endpoint fees.
+> **VPC reference:** Full VPC isolation (Lambda + Interface Endpoints) was removed in [PR #6](https://github.com/bradduhon/engram/pull/6). Revert that diff to restore the networking module. That architecture costs ~$58/month in endpoint fees.
 
 ---
 
